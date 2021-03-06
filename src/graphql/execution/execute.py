@@ -178,7 +178,8 @@ class ExecutionContext:
     errors: List[GraphQLError]
     middleware_manager: Optional[MiddlewareManager]
 
-    is_awaitable = staticmethod(default_is_awaitable)
+    is_awaitable:Callable[[AwaitableOrValue], bool] = staticmethod(default_is_awaitable)
+    treat_function_async_declaration_as_canonical: bool
 
     def __init__(
         self,
@@ -193,6 +194,7 @@ class ExecutionContext:
         errors: List[GraphQLError],
         middleware_manager: Optional[MiddlewareManager],
         is_awaitable: Optional[Callable[[Any], bool]],
+        treat_function_async_declaration_as_canonical:bool=False
     ) -> None:
         self.schema = schema
         self.fragments = fragments
@@ -207,6 +209,8 @@ class ExecutionContext:
         if is_awaitable:
             self.is_awaitable = is_awaitable
         self._subfields_cache: Dict[Tuple, Dict[str, List[FieldNode]]] = {}
+        self.treat_function_async_declaration_as_canonical = treat_function_async_declaration_as_canonical
+
 
     @classmethod
     def build(

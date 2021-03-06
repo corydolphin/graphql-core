@@ -1,3 +1,4 @@
+import asyncio
 from enum import Enum
 from typing import (
     Any,
@@ -459,6 +460,7 @@ class GraphQLField:
     deprecation_reason: Optional[str]
     extensions: Optional[Dict[str, Any]]
     ast_node: Optional[FieldDefinitionNode]
+    resolver_is_async:bool
 
     def __init__(
         self,
@@ -515,6 +517,7 @@ class GraphQLField:
         self.deprecation_reason = deprecation_reason
         self.extensions = extensions
         self.ast_node = ast_node
+        self.resolver_is_async = self.resolve and asyncio.iscoroutinefunction(self.resolve)
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.type!r}>"
