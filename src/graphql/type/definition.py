@@ -548,6 +548,23 @@ class GraphQLField:
             ast_node=self.ast_node,
         )
 
+    def copy_with_resolve(self, resolve: "GraphQLFieldResolver") -> "GraphQLField":
+        """
+        Returns a new copy of this object with the specified resolver set.
+        """
+        kwargs = self.to_kwargs()
+        kwargs['resolve'] = resolve
+        return GraphQLField(**kwargs)
+
+    def copy_with_subscribe(self, subscribe: "GraphQLFieldResolver") -> "GraphQLField":
+        """
+        Returns a new copy of this object with the specified resolver set.
+        """
+        kwargs = self.to_kwargs()
+        kwargs['subscribe'] = subscribe
+        return GraphQLField(**kwargs)
+
+
     def __copy__(self) -> "GraphQLField":  # pragma: no cover
         return self.__class__(**self.to_kwargs())
 

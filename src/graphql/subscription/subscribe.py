@@ -159,7 +159,9 @@ async def create_source_event_stream(
 
     # Call the `subscribe()` resolver or the default resolver to produce an
     # AsyncIterable yielding raw payloads.
-    resolve_fn = field_def.subscribe or context.field_resolver
+
+    if not field_def.subscribe:
+        field_def = field_def.copy_with_subscribe(context.field_resolver)
 
     path = Path(None, response_name, type_.name)
 
@@ -168,8 +170,8 @@ async def create_source_event_stream(
     # `resolve_field_value_or_error` implements the "ResolveFieldEventStream" algorithm
     # from GraphQL specification. It differs from `resolve_field_value` due to
     # providing a different `resolve_fn`.
-    result = context.resolve_field_value_or_error(
-        field_def, field_nodes, resolve_fn, root_value, info
+    result = context.subscribe_field_value_or_error(
+        field_def, field_nodes, root_value, info,
     )
     event_stream = await cast(Awaitable, result) if isawaitable(result) else result
     # If `event_stream` is an Error, rethrow a located error.

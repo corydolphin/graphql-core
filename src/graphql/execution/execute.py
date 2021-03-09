@@ -599,18 +599,17 @@ class ExecutionContext:
         if not field_def:
             return Undefined
 
-        resolve_fn = field_def.resolve or self.field_resolver
+        if not field_def.resolve:
+            field_def = field_def.copy_with_resolve(self.field_resolver)
 
         if self.middleware_manager:
-            resolve_fn = self.middleware_manager.get_field_resolver(resolve_fn)
+            field_def = field_def.copy_with_resolve(self.middleware_manager.get_field_resolver(field_def.resolve))
 
         info = self.build_resolve_info(field_def, field_nodes, parent_type, path)
 
         # Get the resolve function, regardless of if its result is normal or abrupt
         # (error).
-        result = self.resolve_field_value_or_error(
-            field_def, field_nodes, resolve_fn, source, info
-        )
+        result = self.resolve_field_value_or_error(field_def, field_nodes, source, info)
 
         return self.complete_value_catching_error(
             field_def.type, field_nodes, info, path, result
@@ -620,7 +619,6 @@ class ExecutionContext:
         self,
         field_def: GraphQLField,
         field_nodes: List[FieldNode],
-        resolve_fn: GraphQLFieldResolver,
         source: Any,
         info: GraphQLResolveInfo,
     ) -> Union[Exception, Any]:
@@ -638,7 +636,7 @@ class ExecutionContext:
 
             # Note that contrary to the JavaScript implementation, we pass the context
             # value as part of the resolve info.
-            result = resolve_fn(source, info, **args)
+            result = field_def.resolve(source, info, **args)
             if self.is_awaitable(result):
                 # noinspection PyShadowingNames
                 async def await_result() -> Any:
@@ -651,6 +649,42 @@ class ExecutionContext:
             return result
         except Exception as error:
             return error
+
+    def subscribe_field_value_or_error(
+        self,
+        field_def: GraphQLField,
+        field_nodes: List[FieldNode],
+        source: Any,
+        info: GraphQLResolveInfo,
+    ) -> Union[Exception, Any]:
+        """Resolve field to a value or an error.
+
+        Isolates the "ReturnOrAbrupt" behavior to not de-opt the resolve_field()
+        method. Returns the result of resolveFn or the abrupt-return Error object.
+
+        For internal use only.
+        """
+        try:
+            # Build a dictionary of arguments from the field.arguments AST, using the
+            # variables scope to fulfill any variable references.
+            args = get_argument_values(field_def, field_nodes[0], self.variable_values)
+
+            # Note that contrary to the JavaScript implementation, we pass the context
+            # value as part of the resolve info.
+            result = field_def.subscribe(source, info, **args)
+            if self.is_awaitable(result):
+                # noinspection PyShadowingNames
+                async def await_result() -> Any:
+                    try:
+                        return await result
+                    except Exception as error:
+                        return error
+
+                return await_result()
+            return result
+        except Exception as error:
+            return error
+
 
     def complete_value_catching_error(
         self,
