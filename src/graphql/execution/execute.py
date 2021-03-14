@@ -359,6 +359,11 @@ class ExecutionContext:
                 return await_result()
             return result
 
+    def _get_field_def_for_resolution(self, parent_type: GraphQLObjectType, field_path:Path, field_nodes:List[FieldNode]) -> GraphQLField:
+        field_node = field_nodes[0]
+        field_name = field_node.name.value
+        return get_field_def(self.schema, parent_type, field_name)
+
     def execute_fields_serially(
         self,
         parent_type: GraphQLObjectType,
@@ -374,8 +379,10 @@ class ExecutionContext:
         is_awaitable = self.is_awaitable
         for response_name, field_nodes in fields.items():
             field_path = Path(path, response_name, parent_type.name)
+            field_def = self._get_field_def_for_resolution(parent_type, field_path, field_nodes)
+
             result = self.resolve_field(
-                parent_type, source_value, field_nodes, field_path
+                parent_type, field_def, source_value, field_nodes, field_path
             )
             if result is Undefined:
                 continue
@@ -435,8 +442,9 @@ class ExecutionContext:
         append_awaitable = awaitable_fields.append
         for response_name, field_nodes in fields.items():
             field_path = Path(path, response_name, parent_type.name)
+            field_def = self._get_field_def_for_resolution(parent_type, field_path, field_nodes)
             result = self.resolve_field(
-                parent_type, source_value, field_nodes, field_path
+                parent_type, field_def, source_value, field_nodes, field_path
             )
             if result is not Undefined:
                 results[response_name] = result
@@ -582,6 +590,7 @@ class ExecutionContext:
     def resolve_field(
         self,
         parent_type: GraphQLObjectType,
+        field_def: GraphQLField,
         source: Any,
         field_nodes: List[FieldNode],
         path: Path,
@@ -592,10 +601,6 @@ class ExecutionContext:
         resolve function, then calls complete_value to await coroutine objects,
         serialize scalars, or execute the sub-selection-set for objects.
         """
-        field_node = field_nodes[0]
-        field_name = field_node.name.value
-
-        field_def = get_field_def(self.schema, parent_type, field_name)
         if not field_def:
             return Undefined
 
@@ -684,7 +689,6 @@ class ExecutionContext:
             return result
         except Exception as error:
             return error
-
 
     def complete_value_catching_error(
         self,
