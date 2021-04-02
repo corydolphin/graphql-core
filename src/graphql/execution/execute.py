@@ -448,27 +448,19 @@ class ExecutionContext:
             )
             if result is not Undefined:
                 results[response_name] = result
-                if is_awaitable(result):
-                    append_awaitable(response_name)
+                if self.treat_function_async_declaration_as_canonical:
+                    if field_def.resolver_is_async:
+                        append_awaitable(response_name)
+                else:
+                    if is_awaitable(result):
+                        append_awaitable(response_name)
 
         #  If there are no coroutines, we can just return the object
         if not awaitable_fields:
             return results
 
-        # Otherwise, results is a map from field name to the result of resolving that
-        # field, which is possibly a coroutine object. Return a coroutine object that
-        # will yield this same map, but with any coroutines awaited in parallel and
-        # replaced with the values they yielded.
-        async def get_results() -> Dict[str, Any]:
-            results.update(
-                zip(
-                    awaitable_fields,
-                    await gather(*(results[field] for field in awaitable_fields)),
-                )
-            )
-            return results
-
-        return get_results()
+        # At this point, results contains a mixture of resolved fields and awaitable fields. Await and merge
+        return _await_partially_awaited_dictionary(results, awaitable_fields)
 
     def collect_fields(
         self,
@@ -1343,3 +1335,17 @@ def default_field_resolver(source: Any, info: GraphQLResolveInfo, **args: Any) -
     if callable(value):
         return value(info, **args)
     return value
+
+
+async def _await_partially_awaited_dictionary(results:Dict[str,Any], awaitable_keys:List[str]) -> Dict[str, Any]:
+    # Otherwise, results is a map from field name to the result of resolving that
+    # field, which is possibly a coroutine object. Return a coroutine object that
+    # will yield this same map, but with any coroutines awaited in parallel and
+    # replaced with the values they yielded.
+    results.update(
+        zip(
+            awaitable_keys,
+            await gather(*(results[field] for field in awaitable_keys)),
+        )
+    )
+    return results
