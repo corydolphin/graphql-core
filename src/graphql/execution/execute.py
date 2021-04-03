@@ -567,7 +567,7 @@ class ExecutionContext:
         return GraphQLResolveInfo(
             field_nodes[0].name.value,
             field_nodes,
-            field_def.type,
+            field_def,
             parent_type,
             path,
             self.schema,
@@ -634,6 +634,17 @@ class ExecutionContext:
             # Note that contrary to the JavaScript implementation, we pass the context
             # value as part of the resolve info.
             result = field_def.resolve(source, info, **args)
+            if self.treat_function_async_declaration_as_canonical:
+                if field_def.resolver_is_async:
+                    # noinspection PyShadowingNames
+                    async def await_result() -> Any:
+                        try:
+                            return await result
+                        except Exception as error:
+                            return error
+                else:
+                    return result
+
             if self.is_awaitable(result):
                 # noinspection PyShadowingNames
                 async def await_result() -> Any:
@@ -641,7 +652,6 @@ class ExecutionContext:
                         return await result
                     except Exception as error:
                         return error
-
                 return await_result()
             return result
         except Exception as error:

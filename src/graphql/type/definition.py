@@ -585,7 +585,7 @@ class GraphQLResolveInfo(NamedTuple):
 
     field_name: str
     field_nodes: List[FieldNode]
-    return_type: "GraphQLOutputType"
+    field: "GraphQLField"
     parent_type: "GraphQLObjectType"
     path: Path
     schema: "GraphQLSchema"
@@ -595,6 +595,10 @@ class GraphQLResolveInfo(NamedTuple):
     variable_values: Dict[str, Any]
     context: Any
     is_awaitable: Callable[[Any], bool]
+
+    @property
+    def return_type(self) -> "GraphQLOutputType":
+        return self.field.type
 
 
 # Note: Contrary to the Javascript implementation of GraphQLFieldResolver,
