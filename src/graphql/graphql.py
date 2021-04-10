@@ -75,7 +75,7 @@ async def graphql(
       The predicate to be used for checking whether values are awaitable
     """
     # Always return asynchronously for a consistent API.
-    result = graphql_impl(
+    return await graphql_impl(
         schema,
         source,
         root_value,
@@ -88,12 +88,6 @@ async def graphql(
         execution_context_class,
         is_awaitable,
     )
-
-    if isawaitable(result):
-        return await cast(Awaitable[ExecutionResult], result)
-
-    return cast(ExecutionResult, result)
-
 
 def assume_not_awaitable(_value: Any) -> bool:
     """Replacement for isawaitable if everything is assumed to be synchronous."""
@@ -149,7 +143,7 @@ def graphql_sync(
     return cast(ExecutionResult, result)
 
 
-def graphql_impl(
+async def graphql_impl(
     schema: GraphQLSchema,
     source: Union[str, Source],
     root_value: Any,
@@ -182,7 +176,7 @@ def graphql_impl(
         return ExecutionResult(data=None, errors=validation_errors)
 
     # Execute
-    return execute(
+    return await execute(
         schema,
         document,
         root_value,

@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import ensure_future, gather
 from collections.abc import Mapping
 from inspect import isawaitable
@@ -178,7 +179,7 @@ class ExecutionContext:
     errors: List[GraphQLError]
     middleware_manager: Optional[MiddlewareManager]
 
-    is_awaitable:Callable[[AwaitableOrValue], bool] = staticmethod(default_is_awaitable)
+    is_awaitable: Callable[[AwaitableOrValue], bool] = staticmethod(default_is_awaitable)
     treat_function_async_declaration_as_canonical: bool
 
     def __init__(
@@ -194,7 +195,7 @@ class ExecutionContext:
         errors: List[GraphQLError],
         middleware_manager: Optional[MiddlewareManager],
         is_awaitable: Optional[Callable[[Any], bool]],
-        treat_function_async_declaration_as_canonical:bool=False
+        treat_function_async_declaration_as_canonical: bool = False
     ) -> None:
         self.schema = schema
         self.fragments = fragments
@@ -210,7 +211,6 @@ class ExecutionContext:
             self.is_awaitable = is_awaitable
         self._subfields_cache: Dict[Tuple, Dict[str, List[FieldNode]]] = {}
         self.treat_function_async_declaration_as_canonical = treat_function_async_declaration_as_canonical
-
 
     @classmethod
     def build(
@@ -295,20 +295,14 @@ class ExecutionContext:
             is_awaitable,
         )
 
-    def build_response(
-        self, data: AwaitableOrValue[Optional[Dict[str, Any]]]
-    ) -> AwaitableOrValue[ExecutionResult]:
+    async def build_response(
+        self, data: Optional[Dict[str, Any]]
+    ) -> ExecutionResult:
         """Build response.
 
         Given a completed execution context and data, build the (data, errors) response
         defined by the "Response" section of the GraphQL spec.
         """
-        if self.is_awaitable(data):
-
-            async def build_response_async() -> ExecutionResult:
-                return self.build_response(await data)  # type: ignore
-
-            return build_response_async()
         data = cast(Optional[Dict[str, Any]], data)
         errors = self.errors
         if not errors:
@@ -320,9 +314,9 @@ class ExecutionContext:
         )
         return ExecutionResult(data, errors)
 
-    def execute_operation(
+    async def execute_operation(
         self, operation: OperationDefinitionNode, root_value: Any
-    ) -> Optional[AwaitableOrValue[Any]]:
+    ) -> Optional[Any]:
         """Execute an operation.
 
         Implements the "Evaluating operations" section of the spec.
@@ -339,7 +333,7 @@ class ExecutionContext:
         # Similar to complete_value_catching_error.
         try:
             # noinspection PyArgumentList
-            result = (
+            return await (
                 self.execute_fields_serially
                 if operation.operation == OperationType.MUTATION
                 else self.execute_fields
@@ -347,120 +341,58 @@ class ExecutionContext:
         except GraphQLError as error:
             self.errors.append(error)
             return None
-        else:
-            if self.is_awaitable(result):
-                # noinspection PyShadowingNames
-                async def await_result() -> Any:
-                    try:
-                        return await result  # type: ignore
-                    except GraphQLError as error:
-                        self.errors.append(error)
 
-                return await_result()
-            return result
-
-    def _get_field_def_for_resolution(self, parent_type: GraphQLObjectType, field_path:Path, field_nodes:List[FieldNode]) -> GraphQLField:
+    def _get_field_def_for_resolution(self, parent_type: GraphQLObjectType, field_path: Path,
+                                      field_nodes: List[FieldNode]) -> GraphQLField:
         field_node = field_nodes[0]
         field_name = field_node.name.value
         return get_field_def(self.schema, parent_type, field_name)
 
-    def execute_fields_serially(
+    async def execute_fields_serially(
         self,
         parent_type: GraphQLObjectType,
         source_value: Any,
         path: Optional[Path],
         fields: Dict[str, List[FieldNode]],
-    ) -> AwaitableOrValue[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Execute the given fields serially.
 
         Implements the "Evaluating selection sets" section of the spec for "write" mode.
         """
-        results: AwaitableOrValue[Dict[str, Any]] = {}
-        is_awaitable = self.is_awaitable
+        results: Dict[str, Any] = {}
         for response_name, field_nodes in fields.items():
             field_path = Path(path, response_name, parent_type.name)
             field_def = self._get_field_def_for_resolution(parent_type, field_path, field_nodes)
 
-            result = self.resolve_field(
+            result = await self.resolve_field(
                 parent_type, field_def, source_value, field_nodes, field_path
             )
             if result is Undefined:
                 continue
-            if is_awaitable(results):
-                # noinspection PyShadowingNames
-                async def await_and_set_result(
-                    results: Awaitable[Dict[str, Any]],
-                    response_name: str,
-                    result: AwaitableOrValue[Any],
-                ) -> Dict[str, Any]:
-                    awaited_results = await results
-                    awaited_results[response_name] = (
-                        await result if is_awaitable(result) else result
-                    )
-                    return awaited_results
-
-                results = await_and_set_result(
-                    cast(Awaitable, results), response_name, result
-                )
-            elif is_awaitable(result):
-                # noinspection PyShadowingNames
-                async def set_result(
-                    results: Dict[str, Any],
-                    response_name: str,
-                    result: Awaitable,
-                ) -> Dict[str, Any]:
-                    results[response_name] = await result
-                    return results
-
-                results = set_result(
-                    cast(Dict[str, Any], results), response_name, result
-                )
-            else:
-                cast(Dict[str, Any], results)[response_name] = result
-        if is_awaitable(results):
-            # noinspection PyShadowingNames
-            async def get_results() -> Any:
-                return await cast(Awaitable, results)
-
-            return get_results()
+            results[response_name] = result
         return results
 
-    def execute_fields(
+    async def execute_fields(
         self,
         parent_type: GraphQLObjectType,
         source_value: Any,
         path: Optional[Path],
         fields: Dict[str, List[FieldNode]],
-    ) -> AwaitableOrValue[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Execute the given fields concurrently.
 
         Implements the "Evaluating selection sets" section of the spec for "read" mode.
         """
-        results = {}
-        is_awaitable = self.is_awaitable
-        awaitable_fields: List[str] = []
-        append_awaitable = awaitable_fields.append
+        results: Dict[str, Awaitable] = {}
         for response_name, field_nodes in fields.items():
             field_path = Path(path, response_name, parent_type.name)
             field_def = self._get_field_def_for_resolution(parent_type, field_path, field_nodes)
-            result = self.resolve_field(
+            results[response_name] = self.resolve_field(
                 parent_type, field_def, source_value, field_nodes, field_path
             )
-            if result is not Undefined:
-                results[response_name] = result
-                if self.treat_function_async_declaration_as_canonical:
-                    if field_def.resolver_is_async:
-                        append_awaitable(response_name)
-                else:
-                    if is_awaitable(result):
-                        append_awaitable(response_name)
 
-        #  If there are no coroutines, we can just return the object
-        if not awaitable_fields:
-            return results
-
-        # At this point, results contains a mixture of resolved fields and awaitable fields. Await and merge
-        return _await_partially_awaited_dictionary(results, awaitable_fields)
+        awaited_results = await asyncio.gather(*results.values())
+        return dict(zip(results.keys(), awaited_results))
 
     def collect_fields(
         self,
@@ -579,14 +511,14 @@ class ExecutionContext:
             self.is_awaitable,
         )
 
-    def resolve_field(
+    async def resolve_field(
         self,
         parent_type: GraphQLObjectType,
         field_def: GraphQLField,
         source: Any,
         field_nodes: List[FieldNode],
         path: Path,
-    ) -> AwaitableOrValue[Any]:
+    ) -> Any:
         """Resolve the field on the given source object.
 
         In particular, this figures out the value that the field returns by calling its
@@ -606,13 +538,13 @@ class ExecutionContext:
 
         # Get the resolve function, regardless of if its result is normal or abrupt
         # (error).
-        result = self.resolve_field_value_or_error(field_def, field_nodes, source, info)
+        result = await self.resolve_field_value_or_error(field_def, field_nodes, source, info)
 
-        return self.complete_value_catching_error(
+        return await self.complete_value_catching_error(
             field_def.type, field_nodes, info, path, result
         )
 
-    def resolve_field_value_or_error(
+    async def resolve_field_value_or_error(
         self,
         field_def: GraphQLField,
         field_nodes: List[FieldNode],
@@ -633,27 +565,10 @@ class ExecutionContext:
 
             # Note that contrary to the JavaScript implementation, we pass the context
             # value as part of the resolve info.
-            result = field_def.resolve(source, info, **args)
-            if self.treat_function_async_declaration_as_canonical:
-                if field_def.resolver_is_async:
-                    # noinspection PyShadowingNames
-                    async def await_result() -> Any:
-                        try:
-                            return await result
-                        except Exception as error:
-                            return error
-                else:
-                    return result
-
-            if self.is_awaitable(result):
-                # noinspection PyShadowingNames
-                async def await_result() -> Any:
-                    try:
-                        return await result
-                    except Exception as error:
-                        return error
-                return await_result()
-            return result
+            if field_def.resolver_is_async:
+                return await field_def.resolve(source, info, **args)
+            else:
+                return field_def.resolve(source, info, **args)
         except Exception as error:
             return error
 
@@ -692,46 +607,23 @@ class ExecutionContext:
         except Exception as error:
             return error
 
-    def complete_value_catching_error(
+    async def complete_value_catching_error(
         self,
         return_type: GraphQLOutputType,
         field_nodes: List[FieldNode],
         info: GraphQLResolveInfo,
         path: Path,
         result: Any,
-    ) -> AwaitableOrValue[Any]:
+    ) -> Any:
         """Complete a value while catching an error.
 
         This is a small wrapper around completeValue which detects and logs errors in
         the execution context.
         """
-        completed: AwaitableOrValue[Any]
         try:
-            if self.is_awaitable(result):
-
-                async def await_result() -> Any:
-                    value = self.complete_value(
-                        return_type, field_nodes, info, path, await result
-                    )
-                    if self.is_awaitable(value):
-                        return await value
-                    return value
-
-                completed = await_result()
-            else:
-                completed = self.complete_value(
-                    return_type, field_nodes, info, path, result
-                )
-            if self.is_awaitable(completed):
-                # noinspection PyShadowingNames
-                async def await_completed() -> Any:
-                    try:
-                        return await completed
-                    except Exception as error:
-                        self.handle_field_error(error, field_nodes, path, return_type)
-
-                return await_completed()
-            return completed
+            return await self.complete_value(
+                return_type, field_nodes, info, path, result
+            )
         except Exception as error:
             self.handle_field_error(error, field_nodes, path, return_type)
             return None
@@ -754,14 +646,14 @@ class ExecutionContext:
         self.errors.append(error)
         return None
 
-    def complete_value(
+    async def complete_value(
         self,
         return_type: GraphQLOutputType,
         field_nodes: List[FieldNode],
         info: GraphQLResolveInfo,
         path: Path,
         result: Any,
-    ) -> AwaitableOrValue[Any]:
+    ) -> Any:
         """Complete a value.
 
         Implements the instructions for completeValue as defined in the "Field entries"
@@ -791,7 +683,7 @@ class ExecutionContext:
         # If field type is NonNull, complete for inner type, and throw field error if
         # result is null.
         if is_non_null_type(return_type):
-            completed = self.complete_value(
+            completed = await self.complete_value(
                 cast(GraphQLNonNull, return_type).of_type,
                 field_nodes,
                 info,
@@ -811,7 +703,7 @@ class ExecutionContext:
 
         # If field type is List, complete each item in the list with inner type
         if is_list_type(return_type):
-            return self.complete_list_value(
+            return await self.complete_list_value(
                 cast(GraphQLList, return_type), field_nodes, info, path, result
             )
 
@@ -823,13 +715,13 @@ class ExecutionContext:
         # If field type is an abstract type, Interface or Union, determine the runtime
         # Object type and complete for that type.
         if is_abstract_type(return_type):
-            return self.complete_abstract_value(
+            return await self.complete_abstract_value(
                 cast(GraphQLAbstractType, return_type), field_nodes, info, path, result
             )
 
         # If field type is Object, execute and complete all sub-selections.
         if is_object_type(return_type):
-            return self.complete_object_value(
+            return await self.complete_object_value(
                 cast(GraphQLObjectType, return_type), field_nodes, info, path, result
             )
 
@@ -839,14 +731,14 @@ class ExecutionContext:
             f" '{inspect(return_type)}'."
         )
 
-    def complete_list_value(
+    async def complete_list_value(
         self,
         return_type: GraphQLList[GraphQLOutputType],
         field_nodes: List[FieldNode],
         info: GraphQLResolveInfo,
         path: Path,
         result: Iterable[Any],
-    ) -> AwaitableOrValue[Any]:
+    ) -> Any:
         """Complete a list value.
 
         Complete a list value by completing each item in the list with the inner type.
@@ -857,42 +749,13 @@ class ExecutionContext:
                 f" '{info.parent_type.name}.{info.field_name}'."
             )
 
-        # This is specified as a simple map, however we're optimizing the path where
-        # the list contains no coroutine objects by avoiding creating another coroutine
-        # object.
         item_type = return_type.of_type
-        is_awaitable = self.is_awaitable
-        awaitable_indices: List[int] = []
-        append_awaitable = awaitable_indices.append
-        completed_results: List[Any] = []
-        append_result = completed_results.append
-        for index, item in enumerate(result):
-            # No need to modify the info object containing the path, since from here on
-            # it is not ever accessed by resolver functions.
-            field_path = path.add_key(index, None)
-            completed_item = self.complete_value_catching_error(
-                item_type, field_nodes, info, field_path, item
+        return await asyncio.gather(*[
+            self.complete_value_catching_error(
+                item_type, field_nodes, info, path.add_key(index, None), item
             )
-
-            if is_awaitable(completed_item):
-                append_awaitable(index)
-            append_result(completed_item)
-
-        if not awaitable_indices:
-            return completed_results
-
-        # noinspection PyShadowingNames
-        async def get_completed_results() -> Any:
-            for index, result in zip(
-                awaitable_indices,
-                await gather(
-                    *(completed_results[index] for index in awaitable_indices)
-                ),
-            ):
-                completed_results[index] = result
-            return completed_results
-
-        return get_completed_results()
+            for index, item in enumerate(result)
+        ])
 
     @staticmethod
     def complete_leaf_value(return_type: GraphQLLeafType, result: Any) -> Any:
@@ -909,14 +772,14 @@ class ExecutionContext:
             )
         return serialized_result
 
-    def complete_abstract_value(
+    async def complete_abstract_value(
         self,
         return_type: GraphQLAbstractType,
         field_nodes: List[FieldNode],
         info: GraphQLResolveInfo,
         path: Path,
         result: Any,
-    ) -> AwaitableOrValue[Any]:
+    ) -> Any:
         """Complete an abstract value.
 
         Complete a value of an abstract type by determining the runtime object type of
@@ -925,30 +788,10 @@ class ExecutionContext:
         resolve_type_fn = return_type.resolve_type or self.type_resolver
         runtime_type = resolve_type_fn(result, info, return_type)  # type: ignore
 
+        # hack cludge, add introspection on the resolver type to verify this once.
         if self.is_awaitable(runtime_type):
-
-            async def await_complete_object_value() -> Any:
-                value = self.complete_object_value(
-                    self.ensure_valid_runtime_type(
-                        await runtime_type,  # type: ignore
-                        return_type,
-                        field_nodes,
-                        info,
-                        result,
-                    ),
-                    field_nodes,
-                    info,
-                    path,
-                    result,
-                )
-                if self.is_awaitable(value):
-                    return await value  # type: ignore
-                return value
-
-            return await_complete_object_value()
-        runtime_type = cast(Optional[Union[GraphQLObjectType, str]], runtime_type)
-
-        return self.complete_object_value(
+            runtime_type = await runtime_type
+        return await self.complete_object_value(
             self.ensure_valid_runtime_type(
                 runtime_type, return_type, field_nodes, info, result
             ),
@@ -994,51 +837,41 @@ class ExecutionContext:
 
         return runtime_type
 
-    def complete_object_value(
+    async def complete_object_value(
         self,
         return_type: GraphQLObjectType,
         field_nodes: List[FieldNode],
         info: GraphQLResolveInfo,
         path: Path,
         result: Any,
-    ) -> AwaitableOrValue[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Complete an Object value by executing all sub-selections."""
         # If there is an `is_type_of()` predicate function, call it with the current
         # result. If `is_type_of()` returns False, then raise an error rather than
         #  continuing execution.
         if return_type.is_type_of:
             is_type_of = return_type.is_type_of(result, info)
-
+            # hack cludge, inspect once rather than each value.
             if self.is_awaitable(is_type_of):
-
-                async def collect_and_execute_subfields_async() -> Dict[str, Any]:
-                    if not await is_type_of:  # type: ignore
-                        raise invalid_return_type_error(
-                            return_type, result, field_nodes
-                        )
-                    return self.collect_and_execute_subfields(
-                        return_type, field_nodes, path, result
-                    )  # type: ignore
-
-                return collect_and_execute_subfields_async()
+                is_type_of = await is_type_of
 
             if not is_type_of:
                 raise invalid_return_type_error(return_type, result, field_nodes)
 
-        return self.collect_and_execute_subfields(
+        return await self.collect_and_execute_subfields(
             return_type, field_nodes, path, result
         )
 
-    def collect_and_execute_subfields(
+    async def collect_and_execute_subfields(
         self,
         return_type: GraphQLObjectType,
         field_nodes: List[FieldNode],
         path: Path,
         result: Any,
-    ) -> AwaitableOrValue[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Collect sub-fields to execute to complete this value."""
         sub_field_nodes = self.collect_subfields(return_type, field_nodes)
-        return self.execute_fields(return_type, result, path, sub_field_nodes)
+        return await self.execute_fields(return_type, result, path, sub_field_nodes)
 
     def collect_subfields(
         self, return_type: GraphQLObjectType, field_nodes: List[FieldNode]
@@ -1080,7 +913,7 @@ class ExecutionContext:
         return sub_field_nodes
 
 
-def execute(
+async def execute(
     schema: GraphQLSchema,
     document: DocumentNode,
     root_value: Any = None,
@@ -1092,7 +925,7 @@ def execute(
     middleware: Optional[Middleware] = None,
     execution_context_class: Optional[Type["ExecutionContext"]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
-) -> AwaitableOrValue[ExecutionResult]:
+) -> ExecutionResult:
     """Execute a GraphQL operation.
 
     Implements the "Evaluating requests" section of the GraphQL specification.
@@ -1136,8 +969,8 @@ def execute(
     # execution which encounters errors will still result in a coroutine object that
     # can be executed without errors.
 
-    data = exe_context.execute_operation(exe_context.operation, root_value)
-    return exe_context.build_response(data)
+    data = await exe_context.execute_operation(exe_context.operation, root_value)
+    return await exe_context.build_response(data)
 
 
 def assume_not_awaitable(_value: Any) -> bool:
@@ -1286,6 +1119,8 @@ def default_type_resolver(
     Otherwise, test each possible type for the abstract type by calling
     :meth:`~graphql.type.GraphQLObjectType.is_type_of` for the object
     being coerced, returning the first type that matches.
+
+    TODO:@Cory
     """
     # First, look for `__typename`.
     type_name = get_typename(value)
@@ -1345,17 +1180,3 @@ def default_field_resolver(source: Any, info: GraphQLResolveInfo, **args: Any) -
     if callable(value):
         return value(info, **args)
     return value
-
-
-async def _await_partially_awaited_dictionary(results:Dict[str,Any], awaitable_keys:List[str]) -> Dict[str, Any]:
-    # Otherwise, results is a map from field name to the result of resolving that
-    # field, which is possibly a coroutine object. Return a coroutine object that
-    # will yield this same map, but with any coroutines awaited in parallel and
-    # replaced with the values they yielded.
-    results.update(
-        zip(
-            awaitable_keys,
-            await gather(*(results[field] for field in awaitable_keys)),
-        )
-    )
-    return results
