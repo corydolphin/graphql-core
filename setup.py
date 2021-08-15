@@ -39,5 +39,5 @@ setup(
     package_data={"graphql": ["py.typed"]},
     include_package_data=True,
     zip_safe=False,
-    ext_modules=mypycify(["src/graphql/language/ast.py"])
+    ext_modules=mypycify(["src/graphql/language/ast.py", "src/graphql/language/visitor.py"])
 )
