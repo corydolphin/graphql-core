@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Collection, Optional, Union
 
-from ..pyutils import inspect
+from ..pyutils.inspect import inspect
 from .graphql_error import GraphQLError
 
 if TYPE_CHECKING:

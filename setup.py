@@ -1,5 +1,6 @@
 from re import search
 from setuptools import setup, find_packages
+from mypyc.build import mypycify
 
 with open("src/graphql/version.py") as version_file:
     version = search('version = "(.*)"', version_file.read()).group(1)
@@ -38,4 +39,5 @@ setup(
     package_data={"graphql": ["py.typed"]},
     include_package_data=True,
     zip_safe=False,
+    ext_modules=mypycify(["src/graphql/language/ast.py", "src/graphql/language/visitor.py"])
 )

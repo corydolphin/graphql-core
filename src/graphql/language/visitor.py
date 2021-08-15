@@ -9,7 +9,7 @@ from typing import (
     NamedTuple,
     Optional,
     Tuple,
-    Union,
+    Union, cast,
 )
 
 from ..pyutils import inspect, snake_to_camel
@@ -201,7 +201,7 @@ class Visitor:
         visit_fn = getattr(self, f"{method}_{kind}", None)
         if not visit_fn:
             visit_fn = getattr(self, method, None)
-        return visit_fn
+        return cast(Callable, visit_fn)
 
 
 class Stack(NamedTuple):
