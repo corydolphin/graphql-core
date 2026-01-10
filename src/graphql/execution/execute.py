@@ -235,6 +235,8 @@ class ExecutionContext(IncrementalPublisherContext):
         self._relevant_sub_fields: dict[tuple, CollectedFields] = {}
         self._stream_usages: RefMap[FieldGroup, StreamUsage] = RefMap()
         self._field_plans: RefMap[GroupedFieldSet, FieldPlan] = RefMap()
+        # Cache for argument values (keyed by field node id)
+        self._arg_cache: dict[int, dict[str, Any]] = {}
 
     @classmethod
     def build(
@@ -605,9 +607,13 @@ class ExecutionContext(IncrementalPublisherContext):
         try:
             # Build a dictionary of arguments from the field.arguments AST, using the
             # variables scope to fulfill any variable references.
-            args = get_argument_values(
-                field_def, field_group[0].node, self.variable_values
-            )
+            # Use cache since arguments are static per field node during execution.
+            field_node = field_group[0].node
+            node_id = id(field_node)
+            args = self._arg_cache.get(node_id)
+            if args is None:
+                args = get_argument_values(field_def, field_node, self.variable_values)
+                self._arg_cache[node_id] = args
 
             # Note that contrary to the JavaScript implementation, we pass the context
             # value as part of the resolve info.
