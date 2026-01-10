@@ -139,7 +139,7 @@ def coerce_input_value(
                 )
             else:
                 key = keys[0]
-                value = coerced_dict[key]
+                value: Any = coerced_dict[key]
                 if value is None:
                     on_error(
                         (path.as_list() if path else []) + [key],
