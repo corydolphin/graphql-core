@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   benchmarks:
     name: 📈 Benchmarks
@@ -37,6 +41,5 @@ jobs:
         id: run-benchmarks
         uses: CodSpeedHQ/action@v4
         with:
-          mode: instrumentation
-          token: ${{ secrets.CODSPEED_TOKEN }}
-          run: tox -e py313 -- -k benchmarks --benchmark-enable --codspeed
+          mode: simulation
+          run: tox -e py314 -- -k benchmarks --benchmark-enable --codspeed
