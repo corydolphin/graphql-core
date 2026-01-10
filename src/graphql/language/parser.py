@@ -266,8 +266,8 @@ class Parser:
     def parse_name(self) -> NameNode:
         """Convert a name lex token into a name parse node."""
         token = self.expect_token(TokenKind.NAME)
-        # NAME tokens always have a value
-        return NameNode(value=cast("str", token.value), loc=self.loc(token))
+        # NAME tokens always have a string value (avoid cast() overhead)
+        return NameNode(value=token.value, loc=self.loc(token))  # type: ignore[arg-type]
 
     # Implement the parsing rules in the Document section.
 
@@ -317,7 +317,7 @@ class Parser:
         )
 
         if keyword_token.kind is TokenKind.NAME:
-            token_name = cast("str", keyword_token.value)
+            token_name: str = keyword_token.value  # type: ignore[assignment]
             method_name = self._parse_type_system_definition_method_names.get(
                 token_name
             )
@@ -474,7 +474,7 @@ class Parser:
         item = self.parse_const_argument if is_const else self.parse_argument
         return self.optional_many(
             TokenKind.PAREN_L,
-            cast("Callable[[], ArgumentNode]", item),
+            item,
             TokenKind.PAREN_R,
         )
 
@@ -711,7 +711,7 @@ class Parser:
         keyword_token = self._lexer.lookahead()
         if keyword_token.kind == TokenKind.NAME:
             method_name = self._parse_type_extension_method_names.get(
-                cast("str", keyword_token.value)
+                keyword_token.value  # type: ignore[arg-type]
             )
             if method_name:  # pragma: no cover
                 return getattr(self, f"parse_{method_name}")()

@@ -30,6 +30,7 @@ MYPYC_MODULES = [
     "graphql/language/lexer.py",
     "graphql/language/parser.py",
     "graphql/language/predicates.py",
+    "graphql/language/character_classes.py",
     "graphql/utilities/coerce_input_value.py",
     "graphql/utilities/value_from_ast.py",
     "graphql/utilities/ast_from_value.py",
