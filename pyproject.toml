@@ -149,6 +149,13 @@ ignore = [
 "*/__init__.py" = [
    "I001",  # imports do not need to be sorted
 ]
+"build_mypyc.py" = [
+   "BLE001",  # allow catching blind exception
+   "EXE001",  # shebang for documentation
+   "I001",  # imports in logical order
+   "PTH",  # simpler path handling for script
+   "T201",  # print is expected in CLI script
+]
 "src/graphql/execution/*" = [
     "BLE001",  # allow catching blind exception
 ]

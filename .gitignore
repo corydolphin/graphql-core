@@ -27,3 +27,4 @@ __pycache__/
 *.lock
 *.log
 *.py[cod]
+*.so
