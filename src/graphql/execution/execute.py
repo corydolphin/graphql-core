@@ -703,7 +703,7 @@ class ExecutionContext(IncrementalPublisherContext):
 
         # If the field type is non-nullable, then it is resolved without any protection
         # from errors, however it still properly locates the error.
-        if is_non_null_type(return_type):
+        if return_type._is_non_null_type:
             raise error
 
         # Otherwise, error protection is applied, logging the error and resolving a
@@ -752,7 +752,8 @@ class ExecutionContext(IncrementalPublisherContext):
 
         # If field type is NonNull, complete for inner type, and throw field error if
         # result is null.
-        if is_non_null_type(return_type):
+        # Use type tags for fast dispatch (avoids isinstance overhead)
+        if return_type._is_non_null_type:
             completed = self.complete_value(
                 return_type.of_type,
                 field_group,
@@ -775,7 +776,7 @@ class ExecutionContext(IncrementalPublisherContext):
             return GraphQLWrappedResult(None)
 
         # If field type is List, complete each item in the list with inner type
-        if is_list_type(return_type):
+        if return_type._is_list_type:
             return self.complete_list_value(
                 return_type,
                 field_group,
@@ -788,12 +789,12 @@ class ExecutionContext(IncrementalPublisherContext):
 
         # If field type is a leaf type, Scalar or Enum, serialize to a valid value,
         # returning null if serialization is not possible.
-        if is_leaf_type(return_type):
+        if return_type._is_leaf_type:
             return GraphQLWrappedResult(self.complete_leaf_value(return_type, result))
 
         # If field type is an abstract type, Interface or Union, determine the runtime
         # Object type and complete for that type.
-        if is_abstract_type(return_type):
+        if return_type._is_abstract_type:
             return self.complete_abstract_value(
                 return_type,
                 field_group,
@@ -805,7 +806,7 @@ class ExecutionContext(IncrementalPublisherContext):
             )
 
         # If field type is Object, execute and complete all sub-selections.
-        if is_object_type(return_type):
+        if return_type._is_object_type:
             return self.complete_object_value(
                 return_type,
                 field_group,
