@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from ..error import GraphQLSyntaxError
 from .ast import Token
 from .block_string import dedent_block_string_lines
-from .character_classes import is_digit, is_name_continue, is_name_start
+from .character_classes import DIGITS, NAME_CONTINUE, NAME_START, WHITESPACE
 from .token_kind import TokenKind
 
 if TYPE_CHECKING:
@@ -109,7 +109,7 @@ class Lexer:
         while position < body_length:
             char = body[position]  # SourceCharacter
 
-            if char in " \t,\ufeff":
+            if char in WHITESPACE:
                 position += 1
                 continue
             if char == "\n":
@@ -138,10 +138,11 @@ class Lexer:
             if kind:
                 return self.create_token(kind, position, position + 1)
 
-            if is_digit(char) or char == "-":
+            if char in DIGITS or char == "-":
                 return self.read_number(position, char)
 
-            if is_name_start(char):
+            # Inline frozenset check for performance
+            if char in NAME_START:
                 return self.read_name(position)
 
             if char == "." and body[position + 1 : position + 3] == "..":
@@ -204,7 +205,7 @@ class Lexer:
         if char == "0":
             position += 1
             char = body[position : position + 1]
-            if is_digit(char):
+            if char in DIGITS:
                 raise GraphQLSyntaxError(
                     self.source,
                     position,
@@ -231,7 +232,7 @@ class Lexer:
             char = body[position : position + 1]
 
         # Numbers cannot be followed by . or NameStart
-        if char and (char == "." or is_name_start(char)):
+        if char and (char == "." or char in NAME_START):
             raise GraphQLSyntaxError(
                 self.source,
                 position,
@@ -248,7 +249,7 @@ class Lexer:
 
     def read_digits(self, start: int, first_char: str) -> int:
         """Return the new position in the source after reading one or more digits."""
-        if not is_digit(first_char):
+        if first_char not in DIGITS:
             raise GraphQLSyntaxError(
                 self.source,
                 start,
@@ -259,7 +260,7 @@ class Lexer:
         body = self.source.body
         body_length = len(body)
         position = start + 1
-        while position < body_length and is_digit(body[position]):
+        while position < body_length and body[position] in DIGITS:
             position += 1
         return position
 
@@ -452,10 +453,8 @@ class Lexer:
         body_length = len(body)
         position = start + 1
 
-        while position < body_length:
-            char = body[position]
-            if not is_name_continue(char):
-                break
+        # Inline frozenset check for performance (avoids function call overhead)
+        while position < body_length and body[position] in NAME_CONTINUE:
             position += 1
 
         return self.create_token(TokenKind.NAME, start, position, body[start:position])
