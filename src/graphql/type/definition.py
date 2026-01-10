@@ -7,11 +7,13 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Generic,
     NamedTuple,
     TypedDict,
     TypeVar,
     cast,
+    final,
     overload,
 )
 
@@ -230,7 +232,7 @@ class GraphQLNamedType(GraphQLType):
     ast_node: TypeDefinitionNode | None
     extension_ast_nodes: tuple[TypeExtensionNode, ...]
 
-    reserved_types: Mapping[str, GraphQLNamedType] = {}
+    reserved_types: ClassVar[Mapping[str, GraphQLNamedType]] = {}
 
     def __new__(cls, name: str, *_args: Any, **_kwargs: Any) -> GraphQLNamedType:
         """Create a GraphQL named type."""
@@ -318,6 +320,7 @@ class GraphQLScalarTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     specified_by_url: str | None
 
 
+@final
 class GraphQLScalarType(GraphQLNamedType):
     """Scalar Type Definition
 
@@ -467,6 +470,7 @@ class GraphQLFieldKwargs(TypedDict, total=False):
     ast_node: FieldDefinitionNode | None
 
 
+@final
 class GraphQLField:  # noqa: PLW1641
     """Definition of a GraphQL field"""
 
@@ -544,9 +548,12 @@ class GraphQLField:  # noqa: PLW1641
 
 TContext = TypeVar("TContext")  # pylint: disable=invalid-name
 
-try:
+# Use TYPE_CHECKING for generic version (type checkers), simple version at runtime.
+# This avoids mypyc issues with conditional class definitions and Python 3.10
+# incompatibility with NamedTuple + Generic.
+if TYPE_CHECKING:
 
-    class GraphQLResolveInfo(NamedTuple, Generic[TContext]):  # pyright: ignore
+    class GraphQLResolveInfo(NamedTuple, Generic[TContext]):
         """Collection of information passed to the resolvers.
 
         This is always passed as the first argument to the resolvers.
@@ -568,11 +575,10 @@ try:
         variable_values: dict[str, Any]
         context: TContext
         is_awaitable: Callable[[Any], TypeGuard[Awaitable]]
-except TypeError as error:  # pragma: no cover
-    if "Multiple inheritance with NamedTuple is not supported" not in str(error):
-        raise  # only catch expected error for Python 3.10
 
-    class GraphQLResolveInfo(NamedTuple):  # type: ignore[no-redef]
+else:
+
+    class GraphQLResolveInfo(NamedTuple):
         """Collection of information passed to the resolvers.
 
         This is always passed as the first argument to the resolvers.
@@ -632,6 +638,7 @@ class GraphQLArgumentKwargs(TypedDict, total=False):
     ast_node: InputValueDefinitionNode | None
 
 
+@final
 class GraphQLArgument:  # noqa: PLW1641
     """Definition of a GraphQL argument"""
 
@@ -701,6 +708,7 @@ class GraphQLObjectTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     is_type_of: GraphQLIsTypeOfFn | None
 
 
+@final
 class GraphQLObjectType(GraphQLNamedType):
     """Object Type Definition
 
@@ -818,6 +826,7 @@ class GraphQLInterfaceTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     resolve_type: GraphQLTypeResolver | None
 
 
+@final
 class GraphQLInterfaceType(GraphQLNamedType):
     """Interface Type Definition
 
@@ -921,6 +930,7 @@ class GraphQLUnionTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     resolve_type: GraphQLTypeResolver | None
 
 
+@final
 class GraphQLUnionType(GraphQLNamedType):
     """Union Type Definition
 
@@ -1013,6 +1023,7 @@ class GraphQLEnumTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     names_as_values: bool | None
 
 
+@final
 class GraphQLEnumType(GraphQLNamedType):
     """Enum Type Definition
 
@@ -1209,6 +1220,7 @@ class GraphQLEnumValueKwargs(TypedDict, total=False):
     ast_node: EnumValueDefinitionNode | None
 
 
+@final
 class GraphQLEnumValue:  # noqa: PLW1641
     """A GraphQL enum value."""
 
@@ -1267,6 +1279,7 @@ class GraphQLInputObjectTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     is_one_of: bool
 
 
+@final
 class GraphQLInputObjectType(GraphQLNamedType):
     """Input Object Type Definition
 
@@ -1383,6 +1396,7 @@ class GraphQLInputFieldKwargs(TypedDict, total=False):
     ast_node: InputValueDefinitionNode | None
 
 
+@final
 class GraphQLInputField:  # noqa: PLW1641
     """Definition of a GraphQL input field"""
 
@@ -1447,6 +1461,7 @@ def is_required_input_field(field: GraphQLInputField) -> bool:
 # Wrapper types
 
 
+@final
 class GraphQLList(GraphQLWrappingType[GT_co]):
     """List Type Wrapper
 
@@ -1489,6 +1504,7 @@ def assert_list_type(type_: Any) -> GraphQLList:
 GNT_co = TypeVar("GNT_co", bound="GraphQLNullableType", covariant=True)
 
 
+@final
 class GraphQLNonNull(GraphQLWrappingType[GNT_co]):
     """Non-Null Type Wrapper
 
