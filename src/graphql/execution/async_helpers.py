@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Awaitable, Sequence
 
-from ..pyutils import gather_with_cancel
+from ..pyutils.gather_with_cancel import gather_with_cancel
 
 if TYPE_CHECKING:
     from .types import ExecutionResult, ExperimentalIncrementalExecutionResults

@@ -38,6 +38,7 @@ MYPYC_MODULES = [
     "graphql/execution/collect_fields.py",
     "graphql/execution/values.py",
     "graphql/execution/execute_sync.py",
+    "graphql/execution/async_helpers.py",
 ]
 
 
