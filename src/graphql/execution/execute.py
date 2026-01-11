@@ -104,6 +104,15 @@ from .types import (
 )
 from .values import get_argument_values, get_directive_values, get_variable_values
 from .execute_sync import complete_sync_leaf_field
+from .async_helpers import (
+    await_field_result,
+    await_fields_and_wrap,
+    await_field_completion,
+    await_list_and_wrap,
+    await_list_item_completion,
+    await_serial_field_result,
+    await_operation_result,
+)
 
 if TYPE_CHECKING:
     from typing import TypeAlias, TypeGuard
@@ -409,19 +418,14 @@ class ExecutionContext(IncrementalPublisherContext):
                 )
 
             if self.is_awaitable(graphql_wrapped_result):
-
-                async def await_result() -> (
-                    ExecutionResult | ExperimentalIncrementalExecutionResults
-                ):
-                    try:
-                        resolved = await graphql_wrapped_result
-                    except GraphQLError as error:
-                        return ExecutionResult(None, with_error(self.errors, error))
-                    return self.build_data_response(
-                        resolved.result, resolved.increments
-                    )
-
-                return await_result()
+                return await_operation_result(
+                    graphql_wrapped_result,
+                    self.build_data_response,
+                    lambda: self.errors,
+                    GraphQLError,
+                    ExecutionResult,
+                    with_error,
+                )
 
             resolved = cast("GraphQLWrappedResult", graphql_wrapped_result)
 
@@ -485,14 +489,9 @@ class ExecutionContext(IncrementalPublisherContext):
             if result is Undefined:
                 return graphql_wrapped_result
             if is_awaitable(result):
-
-                async def set_result() -> GraphQLWrappedResult[dict[str, Any]]:
-                    resolved = await result
-                    graphql_wrapped_result.result[response_name] = resolved.result
-                    graphql_wrapped_result.add_increments(resolved.increments)
-                    return graphql_wrapped_result
-
-                return set_result()
+                return await_serial_field_result(
+                    result, graphql_wrapped_result, response_name
+                )
 
             resolved = cast("GraphQLWrappedResult[dict[str, Any]]", result)
             graphql_wrapped_result.result[response_name] = resolved.result
@@ -535,15 +534,7 @@ class ExecutionContext(IncrementalPublisherContext):
             )
             if result is not Undefined:
                 if is_awaitable(result):
-
-                    async def resolve(
-                        result: Awaitable[GraphQLWrappedResult[dict[str, Any]]],
-                    ) -> dict[str, Any]:
-                        resolved = await result
-                        add_increments(resolved.increments)
-                        return resolved.result
-
-                    results[response_name] = resolve(result)
+                    results[response_name] = await_field_result(result, add_increments)
                     append_awaitable(response_name)
                 else:
                     result = cast("GraphQLWrappedResult[dict[str, Any]]", result)
@@ -558,20 +549,10 @@ class ExecutionContext(IncrementalPublisherContext):
         # field, which is possibly a coroutine object. Return a coroutine object that
         # will yield this same map, but with any coroutines awaited in parallel and
         # replaced with the values they yielded.
-        async def get_results() -> GraphQLWrappedResult[dict[str, Any]]:
-            if len(awaitable_fields) == 1:
-                # If there is only one field, avoid the overhead of parallelization.
-                field = awaitable_fields[0]
-                results[field] = await results[field]
-            else:
-                awaited_results = await gather_with_cancel(
-                    *(results[field] for field in awaitable_fields)
-                )
-                results.update(zip(awaitable_fields, awaited_results, strict=True))
-
-            return GraphQLWrappedResult(results, graphql_wrapped_result.increments)
-
-        return get_results()
+        return await_fields_and_wrap(
+            results, awaitable_fields, lambda: graphql_wrapped_result.increments,
+            GraphQLWrappedResult
+        )
 
     def execute_field(
         self,
@@ -675,21 +656,15 @@ class ExecutionContext(IncrementalPublisherContext):
                 defer_map,
             )
             if self.is_awaitable(completed):
-
-                async def await_completed() -> Any:
-                    try:
-                        return await completed
-                    except Exception as raw_error:
-                        self.handle_field_error(
-                            raw_error,
-                            return_type,
-                            field_group,
-                            path,
-                            incremental_context,
-                        )
-                        return GraphQLWrappedResult(None)
-
-                return await_completed()
+                return await_field_completion(
+                    completed,
+                    self.handle_field_error,
+                    return_type,
+                    field_group,
+                    path,
+                    incremental_context,
+                    GraphQLWrappedResult,
+                )
 
         except Exception as raw_error:
             self.handle_field_error(
@@ -1208,24 +1183,12 @@ class ExecutionContext(IncrementalPublisherContext):
         if not awaitable_indices:
             return graphql_wrapped_result
 
-        async def get_completed_results() -> GraphQLWrappedResult[list[Any]]:
-            if len(awaitable_indices) == 1:
-                # If there is only one index, avoid the overhead of parallelization.
-                index = awaitable_indices[0]
-                completed_results[index] = await completed_results[index]
-            else:
-                awaited_results = await gather_with_cancel(
-                    *(completed_results[index] for index in awaitable_indices)
-                )
-                for index, sub_result in zip(
-                    awaitable_indices, awaited_results, strict=True
-                ):
-                    completed_results[index] = sub_result
-            return GraphQLWrappedResult(
-                completed_results, graphql_wrapped_result.increments
-            )
-
-        return get_completed_results()
+        return await_list_and_wrap(
+            completed_results,
+            awaitable_indices,
+            lambda: graphql_wrapped_result.increments,
+            GraphQLWrappedResult,
+        )
 
     def complete_list_item_value(
         self,
@@ -1257,23 +1220,17 @@ class ExecutionContext(IncrementalPublisherContext):
             )
 
             if is_awaitable(completed_item):
-
-                async def await_completed() -> Any:
-                    try:
-                        resolved = await completed_item  # type: ignore
-                    except Exception as raw_error:
-                        self.handle_field_error(
-                            raw_error,
-                            item_type,
-                            field_group,
-                            item_path,
-                            incremental_context,
-                        )
-                        return None
-                    parent.add_increments(resolved.increments)
-                    return resolved.result
-
-                complete_results.append(await_completed())
+                complete_results.append(
+                    await_list_item_completion(
+                        completed_item,
+                        self.handle_field_error,
+                        item_type,
+                        field_group,
+                        item_path,
+                        incremental_context,
+                        parent.add_increments,
+                    )
+                )
                 return True
 
             completed_item = cast("GraphQLWrappedResult[Any]", completed_item)
