@@ -103,6 +103,7 @@ from .types import (
     StreamRecord,
 )
 from .values import get_argument_values, get_directive_values, get_variable_values
+from .execute_sync import complete_sync_leaf_field
 
 if TYPE_CHECKING:
     from typing import TypeAlias, TypeGuard
@@ -597,63 +598,30 @@ class ExecutionContext(IncrementalPublisherContext):
 
         return_type = field_def.type
 
-        # Fast path: default resolver without middleware, for non-callable values
-        # This is the most common case: dict/object attribute access returning data
-        # Both the field must not have a custom resolver AND the context's field_resolver
-        # must be the default (no custom field_resolver passed to execute)
+        # Fast path: default resolver without middleware, for sync leaf types
+        # This delegates to a mypyc-compiled helper for maximum performance
         if (
-            field_def.resolve is None
+            self._assume_sync
+            and field_def.resolve is None
             and self.field_resolver is default_field_resolver
             and not self.middleware_manager
         ):
-            # Inline default resolver: get value from dict or attribute
-            # Check dict first (most common) to avoid expensive Mapping isinstance
-            source_type = type(source)
-            if source_type is dict:
-                result = source.get(field_name)
-            elif isinstance(source, Mapping):
-                result = source.get(field_name)
-            else:
-                result = getattr(source, field_name, None)
-            # If result is callable (method) or awaitable, fall through to standard path
-            # since methods may expect ResolveInfo as first argument and awaitables
-            # need proper async handling
-            # For sync execution, skip the awaitable check entirely (it's always False)
-            if not callable(result) and (
-                self._assume_sync or not self.is_awaitable(result)
-            ):
-                try:
-                    # Fast path for leaf types (scalars/enums) - most common case
-                    # Skip ResolveInfo creation since complete_leaf_value doesn't use it
-                    inner_type = return_type
-                    is_non_null = return_type._is_non_null_type
-                    if is_non_null:
-                        inner_type = return_type.of_type
-
-                    if inner_type._is_leaf_type:
-                        if result is None or result is Undefined:
-                            if is_non_null:
-                                msg = (
-                                    "Cannot return null for non-nullable field"
-                                    f" {parent_type.name}.{field_name}."
-                                )
-                                raise TypeError(msg)
-                            return GraphQLWrappedResult(None)
-                        if isinstance(result, Exception):
-                            raise result
-                        serialized = self.complete_leaf_value(inner_type, result)
-                        return GraphQLWrappedResult(serialized)
-
-                    # For non-leaf types, fall through to standard path with ResolveInfo
-                except Exception as raw_error:
-                    self.handle_field_error(
-                        raw_error,
-                        return_type,
-                        field_group,
-                        path,
-                        incremental_context,
-                    )
-                    return GraphQLWrappedResult(None)
+            try:
+                result, success = complete_sync_leaf_field(
+                    return_type, source, field_name, parent_type.name
+                )
+                if success:
+                    return GraphQLWrappedResult(result)
+                # Fall through to standard path if not a simple leaf case
+            except Exception as raw_error:
+                self.handle_field_error(
+                    raw_error,
+                    return_type,
+                    field_group,
+                    path,
+                    incremental_context,
+                )
+                return GraphQLWrappedResult(None)
 
         # Standard path: custom resolver or middleware or non-leaf type
         resolve_fn = field_def.resolve or self.field_resolver
