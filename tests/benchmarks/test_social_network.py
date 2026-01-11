@@ -7,12 +7,17 @@ This benchmark simulates a realistic social network API with:
 - Various query depths and breadths
 
 Queries are pre-parsed and pre-validated to measure only execution time.
+Uses uvloop for faster async execution.
 """
 
 import asyncio
 from typing import Any
 
 import pytest
+import uvloop
+
+# Set uvloop as the default event loop policy
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 from graphql import (
     DocumentNode,
@@ -393,8 +398,8 @@ DOC_DEEP = _prepare_query(QUERY_DEEP)
 
 @pytest.fixture
 def event_loop():
-    """Create event loop for async benchmarks."""
-    loop = asyncio.new_event_loop()
+    """Create uvloop event loop for async benchmarks."""
+    loop = uvloop.new_event_loop()
     yield loop
     loop.close()
 
