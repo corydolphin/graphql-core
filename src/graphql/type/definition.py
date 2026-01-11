@@ -522,6 +522,8 @@ class GraphQLField:  # noqa: PLW1641
     deprecation_reason: str | None
     extensions: dict[str, Any]
     ast_node: FieldDefinitionNode | None
+    # Pre-computed flag for execution optimization
+    _has_args: bool  # True if field has argument definitions
 
     def __init__(
         self,
@@ -551,6 +553,8 @@ class GraphQLField:  # noqa: PLW1641
         self.deprecation_reason = deprecation_reason
         self.extensions = extensions or {}
         self.ast_node = ast_node
+        # Pre-compute flag for fast execution paths
+        self._has_args = bool(self.args)
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.type!r}>"

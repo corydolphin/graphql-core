@@ -229,6 +229,8 @@ class ExecutionContext(IncrementalPublisherContext):
         self.enable_early_execution = enable_early_execution
         self.middleware_manager = middleware_manager
         self.is_awaitable = is_awaitable or default_is_awaitable
+        # Flag to skip awaitable checks when we know everything is sync
+        self._assume_sync = is_awaitable is assume_not_awaitable
         self.errors = None
         self.cancellable_streams = None
         self._canceled_iterators: set[AsyncIterator] = set()
@@ -587,12 +589,73 @@ class ExecutionContext(IncrementalPublisherContext):
         calling its resolve function, then calls complete_value to await coroutine
         objects, serialize scalars, or execute the sub-selection-set for objects.
         """
-        field_name = field_group[0].node.name.value
+        field_node = field_group[0].node
+        field_name = field_node.name.value
         field_def = self.schema.get_field(parent_type, field_name)
         if not field_def:
             return Undefined
 
         return_type = field_def.type
+
+        # Fast path: default resolver without middleware, for non-callable values
+        # This is the most common case: dict/object attribute access returning data
+        # Both the field must not have a custom resolver AND the context's field_resolver
+        # must be the default (no custom field_resolver passed to execute)
+        if (
+            field_def.resolve is None
+            and self.field_resolver is default_field_resolver
+            and not self.middleware_manager
+        ):
+            # Inline default resolver: get value from dict or attribute
+            # Check dict first (most common) to avoid expensive Mapping isinstance
+            source_type = type(source)
+            if source_type is dict:
+                result = source.get(field_name)
+            elif isinstance(source, Mapping):
+                result = source.get(field_name)
+            else:
+                result = getattr(source, field_name, None)
+            # If result is callable (method) or awaitable, fall through to standard path
+            # since methods may expect ResolveInfo as first argument and awaitables
+            # need proper async handling
+            # For sync execution, skip the awaitable check entirely (it's always False)
+            if not callable(result) and (
+                self._assume_sync or not self.is_awaitable(result)
+            ):
+                try:
+                    # Fast path for leaf types (scalars/enums) - most common case
+                    # Skip ResolveInfo creation since complete_leaf_value doesn't use it
+                    inner_type = return_type
+                    is_non_null = return_type._is_non_null_type
+                    if is_non_null:
+                        inner_type = return_type.of_type
+
+                    if inner_type._is_leaf_type:
+                        if result is None or result is Undefined:
+                            if is_non_null:
+                                msg = (
+                                    "Cannot return null for non-nullable field"
+                                    f" {parent_type.name}.{field_name}."
+                                )
+                                raise TypeError(msg)
+                            return GraphQLWrappedResult(None)
+                        if isinstance(result, Exception):
+                            raise result
+                        serialized = self.complete_leaf_value(inner_type, result)
+                        return GraphQLWrappedResult(serialized)
+
+                    # For non-leaf types, fall through to standard path with ResolveInfo
+                except Exception as raw_error:
+                    self.handle_field_error(
+                        raw_error,
+                        return_type,
+                        field_group,
+                        path,
+                        incremental_context,
+                    )
+                    return GraphQLWrappedResult(None)
+
+        # Standard path: custom resolver or middleware or non-leaf type
         resolve_fn = field_def.resolve or self.field_resolver
 
         if self.middleware_manager:
@@ -607,17 +670,21 @@ class ExecutionContext(IncrementalPublisherContext):
         try:
             # Build a dictionary of arguments from the field.arguments AST, using the
             # variables scope to fulfill any variable references.
-            # Use cache since arguments are static per field node during execution.
-            field_node = field_group[0].node
-            node_id = id(field_node)
-            args = self._arg_cache.get(node_id)
-            if args is None:
-                args = get_argument_values(field_def, field_node, self.variable_values)
-                self._arg_cache[node_id] = args
-
-            # Note that contrary to the JavaScript implementation, we pass the context
-            # value as part of the resolve info.
-            result = resolve_fn(source, info, **args)
+            # Skip caching overhead when field has no arguments defined
+            if field_def._has_args:
+                node_id = id(field_node)
+                args = self._arg_cache.get(node_id)
+                if args is None:
+                    args = get_argument_values(
+                        field_def, field_node, self.variable_values
+                    )
+                    self._arg_cache[node_id] = args
+                # Note that contrary to the JavaScript implementation, we pass the context
+                # value as part of the resolve info.
+                result = resolve_fn(source, info, **args)
+            else:
+                # No arguments - call resolver directly without kwargs
+                result = resolve_fn(source, info)
 
             if self.is_awaitable(result):
                 return self.complete_awaitable_value(
@@ -752,16 +819,22 @@ class ExecutionContext(IncrementalPublisherContext):
         Otherwise, the field type expects a sub-selection set, and will complete the
         value by evaluating all sub-selections.
         """
-        # If result is an Exception, throw a located error.
-        if isinstance(result, Exception):
-            raise result
-
-        # If field type is NonNull, complete for inner type, and throw field error if
-        # result is null.
-        # Use type tags for fast dispatch (avoids isinstance overhead)
+        # Fast path for common case: NonNull[LeafType] with non-null, non-exception result
+        # This is the most common pattern in typical GraphQL responses
         if return_type._is_non_null_type:
+            inner_type = return_type.of_type
+            # Fast path: NonNull[Leaf] with valid result (no Exception check needed for
+            # normal dict values, and leaf completion doesn't recurse)
+            if inner_type._is_leaf_type and result is not None and result is not Undefined:
+                if isinstance(result, Exception):
+                    raise result
+                return GraphQLWrappedResult(self.complete_leaf_value(inner_type, result))
+
+            # Standard NonNull path with recursion
+            if isinstance(result, Exception):
+                raise result
             completed = self.complete_value(
-                return_type.of_type,
+                inner_type,
                 field_group,
                 info,
                 path,
@@ -776,6 +849,10 @@ class ExecutionContext(IncrementalPublisherContext):
                 )
                 raise TypeError(msg)
             return completed
+
+        # If result is an Exception, throw a located error.
+        if isinstance(result, Exception):
+            raise result
 
         # If result value is null or undefined then return null.
         if result is None or result is Undefined:
@@ -2083,6 +2160,15 @@ class GraphQLWrappedResult(Generic[T]):
             self.increments.extend(increments)
 
 
+# Singleton for null results (common for optional nullable fields)
+# Use a function to get it to avoid type issues
+def _null_wrapped_result() -> GraphQLWrappedResult[None]:
+    return _NULL_RESULT
+
+
+_NULL_RESULT: GraphQLWrappedResult[None] = GraphQLWrappedResult(None)
+
+
 UNEXPECTED_EXPERIMENTAL_DIRECTIVES = (
     "The provided schema unexpectedly contains experimental directives"
     " (@defer or @stream). These directives may only be utilized"
@@ -2462,11 +2548,14 @@ def default_field_resolver(source: Any, info: GraphQLResolveInfo, **args: Any) -
     """
     # Ensure source is a value for which property access is acceptable.
     field_name = info.field_name
-    value = (
-        source.get(field_name)
-        if isinstance(source, Mapping)
-        else getattr(source, field_name, None)
-    )
+    # Check dict first (most common) to avoid expensive Mapping isinstance
+    source_type = type(source)
+    if source_type is dict:
+        value = source.get(field_name)
+    elif isinstance(source, Mapping):
+        value = source.get(field_name)
+    else:
+        value = getattr(source, field_name, None)
     if callable(value):
         return value(info, **args)
     return value
