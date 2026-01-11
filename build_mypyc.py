@@ -47,7 +47,7 @@ MYPYC_MODULES = [
     "graphql/utilities/type_from_ast.py",
     "graphql/utilities/type_info.py",
     # Execution (core execution engine)
-    "graphql/execution/execute.py",
+    # "graphql/execution/execute.py",  # temporarily excluded - mypyc async closure bug
     "graphql/execution/collect_fields.py",
     "graphql/execution/values.py",
     "graphql/execution/execute_sync.py",
