@@ -54,6 +54,7 @@ from ..type import (
     GraphQLFieldResolver,
     GraphQLLeafType,
     GraphQLList,
+    GraphQLNonNull,
     GraphQLObjectType,
     GraphQLOutputType,
     GraphQLResolveInfo,
@@ -103,6 +104,16 @@ from .types import (
     StreamRecord,
 )
 from .values import get_argument_values, get_directive_values, get_variable_values
+from .execute_sync import complete_sync_leaf_field
+from .async_helpers import (
+    await_field_result,
+    await_fields_and_wrap,
+    await_field_completion,
+    await_list_and_wrap,
+    await_list_item_completion,
+    await_serial_field_result,
+    await_operation_result,
+)
 
 if TYPE_CHECKING:
     from typing import TypeAlias, TypeGuard
@@ -229,12 +240,16 @@ class ExecutionContext(IncrementalPublisherContext):
         self.enable_early_execution = enable_early_execution
         self.middleware_manager = middleware_manager
         self.is_awaitable = is_awaitable or default_is_awaitable
+        # Flag to skip awaitable checks when we know everything is sync
+        self._assume_sync = is_awaitable is assume_not_awaitable
         self.errors = None
         self.cancellable_streams = None
         self._canceled_iterators: set[AsyncIterator] = set()
         self._relevant_sub_fields: dict[tuple, CollectedFields] = {}
         self._stream_usages: RefMap[FieldGroup, StreamUsage] = RefMap()
         self._field_plans: RefMap[GroupedFieldSet, FieldPlan] = RefMap()
+        # Cache for argument values (keyed by field node id)
+        self._arg_cache: dict[int, dict[str, Any]] = {}
 
     @classmethod
     def build(
@@ -404,19 +419,14 @@ class ExecutionContext(IncrementalPublisherContext):
                 )
 
             if self.is_awaitable(graphql_wrapped_result):
-
-                async def await_result() -> (
-                    ExecutionResult | ExperimentalIncrementalExecutionResults
-                ):
-                    try:
-                        resolved = await graphql_wrapped_result
-                    except GraphQLError as error:
-                        return ExecutionResult(None, with_error(self.errors, error))
-                    return self.build_data_response(
-                        resolved.result, resolved.increments
-                    )
-
-                return await_result()
+                return await_operation_result(
+                    graphql_wrapped_result,
+                    self.build_data_response,
+                    lambda: self.errors,
+                    GraphQLError,
+                    ExecutionResult,
+                    with_error,
+                )
 
             resolved = cast("GraphQLWrappedResult", graphql_wrapped_result)
 
@@ -480,14 +490,9 @@ class ExecutionContext(IncrementalPublisherContext):
             if result is Undefined:
                 return graphql_wrapped_result
             if is_awaitable(result):
-
-                async def set_result() -> GraphQLWrappedResult[dict[str, Any]]:
-                    resolved = await result
-                    graphql_wrapped_result.result[response_name] = resolved.result
-                    graphql_wrapped_result.add_increments(resolved.increments)
-                    return graphql_wrapped_result
-
-                return set_result()
+                return await_serial_field_result(
+                    result, graphql_wrapped_result, response_name
+                )
 
             resolved = cast("GraphQLWrappedResult[dict[str, Any]]", result)
             graphql_wrapped_result.result[response_name] = resolved.result
@@ -530,15 +535,7 @@ class ExecutionContext(IncrementalPublisherContext):
             )
             if result is not Undefined:
                 if is_awaitable(result):
-
-                    async def resolve(
-                        result: Awaitable[GraphQLWrappedResult[dict[str, Any]]],
-                    ) -> dict[str, Any]:
-                        resolved = await result
-                        add_increments(resolved.increments)
-                        return resolved.result
-
-                    results[response_name] = resolve(result)
+                    results[response_name] = await_field_result(result, add_increments)
                     append_awaitable(response_name)
                 else:
                     result = cast("GraphQLWrappedResult[dict[str, Any]]", result)
@@ -553,20 +550,10 @@ class ExecutionContext(IncrementalPublisherContext):
         # field, which is possibly a coroutine object. Return a coroutine object that
         # will yield this same map, but with any coroutines awaited in parallel and
         # replaced with the values they yielded.
-        async def get_results() -> GraphQLWrappedResult[dict[str, Any]]:
-            if len(awaitable_fields) == 1:
-                # If there is only one field, avoid the overhead of parallelization.
-                field = awaitable_fields[0]
-                results[field] = await results[field]
-            else:
-                awaited_results = await gather_with_cancel(
-                    *(results[field] for field in awaitable_fields)
-                )
-                results.update(zip(awaitable_fields, awaited_results, strict=True))
-
-            return GraphQLWrappedResult(results, graphql_wrapped_result.increments)
-
-        return get_results()
+        return await_fields_and_wrap(
+            results, awaitable_fields, lambda: graphql_wrapped_result.increments,
+            GraphQLWrappedResult
+        )
 
     def execute_field(
         self,
@@ -585,12 +572,40 @@ class ExecutionContext(IncrementalPublisherContext):
         calling its resolve function, then calls complete_value to await coroutine
         objects, serialize scalars, or execute the sub-selection-set for objects.
         """
-        field_name = field_group[0].node.name.value
+        field_node = field_group[0].node
+        field_name = field_node.name.value
         field_def = self.schema.get_field(parent_type, field_name)
         if not field_def:
             return Undefined
 
         return_type = field_def.type
+
+        # Fast path: default resolver without middleware, for sync leaf types
+        # This delegates to a mypyc-compiled helper for maximum performance
+        if (
+            self._assume_sync
+            and field_def.resolve is None
+            and self.field_resolver is default_field_resolver
+            and not self.middleware_manager
+        ):
+            try:
+                result, success = complete_sync_leaf_field(
+                    return_type, source, field_name, parent_type.name
+                )
+                if success:
+                    return GraphQLWrappedResult(result)
+                # Fall through to standard path if not a simple leaf case
+            except Exception as raw_error:
+                self.handle_field_error(
+                    raw_error,
+                    return_type,
+                    field_group,
+                    path,
+                    incremental_context,
+                )
+                return GraphQLWrappedResult(None)
+
+        # Standard path: custom resolver or middleware or non-leaf type
         resolve_fn = field_def.resolve or self.field_resolver
 
         if self.middleware_manager:
@@ -605,13 +620,21 @@ class ExecutionContext(IncrementalPublisherContext):
         try:
             # Build a dictionary of arguments from the field.arguments AST, using the
             # variables scope to fulfill any variable references.
-            args = get_argument_values(
-                field_def, field_group[0].node, self.variable_values
-            )
-
-            # Note that contrary to the JavaScript implementation, we pass the context
-            # value as part of the resolve info.
-            result = resolve_fn(source, info, **args)
+            # Skip caching overhead when field has no arguments defined
+            if field_def._has_args:
+                node_id = id(field_node)
+                args = self._arg_cache.get(node_id)
+                if args is None:
+                    args = get_argument_values(
+                        field_def, field_node, self.variable_values
+                    )
+                    self._arg_cache[node_id] = args
+                # Note that contrary to the JavaScript implementation, we pass the context
+                # value as part of the resolve info.
+                result = resolve_fn(source, info, **args)
+            else:
+                # No arguments - call resolver directly without kwargs
+                result = resolve_fn(source, info)
 
             if self.is_awaitable(result):
                 return self.complete_awaitable_value(
@@ -634,21 +657,15 @@ class ExecutionContext(IncrementalPublisherContext):
                 defer_map,
             )
             if self.is_awaitable(completed):
-
-                async def await_completed() -> Any:
-                    try:
-                        return await completed
-                    except Exception as raw_error:
-                        self.handle_field_error(
-                            raw_error,
-                            return_type,
-                            field_group,
-                            path,
-                            incremental_context,
-                        )
-                        return GraphQLWrappedResult(None)
-
-                return await_completed()
+                return await_field_completion(
+                    completed,
+                    self.handle_field_error,
+                    return_type,
+                    field_group,
+                    path,
+                    incremental_context,
+                    GraphQLWrappedResult,
+                )
 
         except Exception as raw_error:
             self.handle_field_error(
@@ -703,7 +720,7 @@ class ExecutionContext(IncrementalPublisherContext):
 
         # If the field type is non-nullable, then it is resolved without any protection
         # from errors, however it still properly locates the error.
-        if is_non_null_type(return_type):
+        if return_type._is_non_null_type:
             raise error
 
         # Otherwise, error protection is applied, logging the error and resolving a
@@ -746,15 +763,28 @@ class ExecutionContext(IncrementalPublisherContext):
         Otherwise, the field type expects a sub-selection set, and will complete the
         value by evaluating all sub-selections.
         """
-        # If result is an Exception, throw a located error.
-        if isinstance(result, Exception):
-            raise result
+        # Fast path for common case: NonNull[LeafType] with non-null, non-exception result
+        # This is the most common pattern in typical GraphQL responses
+        if return_type._is_non_null_type:
+            # Cast for mypyc: after checking _is_non_null_type, we know it's GraphQLNonNull
+            non_null_type = cast("GraphQLNonNull[Any]", return_type)
+            inner_type: GraphQLOutputType = non_null_type.of_type
+            # Fast path: NonNull[Leaf] with valid result (no Exception check needed for
+            # normal dict values, and leaf completion doesn't recurse)
+            if inner_type._is_leaf_type and result is not None and result is not Undefined:
+                if isinstance(result, Exception):
+                    raise result
+                return GraphQLWrappedResult(
+                    self.complete_leaf_value(
+                        cast("GraphQLLeafType", inner_type), result
+                    )
+                )
 
-        # If field type is NonNull, complete for inner type, and throw field error if
-        # result is null.
-        if is_non_null_type(return_type):
+            # Standard NonNull path with recursion
+            if isinstance(result, Exception):
+                raise result
             completed = self.complete_value(
-                return_type.of_type,
+                inner_type,
                 field_group,
                 info,
                 path,
@@ -770,14 +800,18 @@ class ExecutionContext(IncrementalPublisherContext):
                 raise TypeError(msg)
             return completed
 
+        # If result is an Exception, throw a located error.
+        if isinstance(result, Exception):
+            raise result
+
         # If result value is null or undefined then return null.
         if result is None or result is Undefined:
             return GraphQLWrappedResult(None)
 
         # If field type is List, complete each item in the list with inner type
-        if is_list_type(return_type):
+        if return_type._is_list_type:
             return self.complete_list_value(
-                return_type,
+                cast("GraphQLList[GraphQLOutputType]", return_type),
                 field_group,
                 info,
                 path,
@@ -788,14 +822,16 @@ class ExecutionContext(IncrementalPublisherContext):
 
         # If field type is a leaf type, Scalar or Enum, serialize to a valid value,
         # returning null if serialization is not possible.
-        if is_leaf_type(return_type):
-            return GraphQLWrappedResult(self.complete_leaf_value(return_type, result))
+        if return_type._is_leaf_type:
+            return GraphQLWrappedResult(
+                self.complete_leaf_value(cast("GraphQLLeafType", return_type), result)
+            )
 
         # If field type is an abstract type, Interface or Union, determine the runtime
         # Object type and complete for that type.
-        if is_abstract_type(return_type):
+        if return_type._is_abstract_type:
             return self.complete_abstract_value(
-                return_type,
+                cast("GraphQLAbstractType", return_type),
                 field_group,
                 info,
                 path,
@@ -805,9 +841,9 @@ class ExecutionContext(IncrementalPublisherContext):
             )
 
         # If field type is Object, execute and complete all sub-selections.
-        if is_object_type(return_type):
+        if return_type._is_object_type:
             return self.complete_object_value(
-                return_type,
+                cast("GraphQLObjectType", return_type),
                 field_group,
                 info,
                 path,
@@ -1156,24 +1192,12 @@ class ExecutionContext(IncrementalPublisherContext):
         if not awaitable_indices:
             return graphql_wrapped_result
 
-        async def get_completed_results() -> GraphQLWrappedResult[list[Any]]:
-            if len(awaitable_indices) == 1:
-                # If there is only one index, avoid the overhead of parallelization.
-                index = awaitable_indices[0]
-                completed_results[index] = await completed_results[index]
-            else:
-                awaited_results = await gather_with_cancel(
-                    *(completed_results[index] for index in awaitable_indices)
-                )
-                for index, sub_result in zip(
-                    awaitable_indices, awaited_results, strict=True
-                ):
-                    completed_results[index] = sub_result
-            return GraphQLWrappedResult(
-                completed_results, graphql_wrapped_result.increments
-            )
-
-        return get_completed_results()
+        return await_list_and_wrap(
+            completed_results,
+            awaitable_indices,
+            lambda: graphql_wrapped_result.increments,
+            GraphQLWrappedResult,
+        )
 
     def complete_list_item_value(
         self,
@@ -1205,23 +1229,17 @@ class ExecutionContext(IncrementalPublisherContext):
             )
 
             if is_awaitable(completed_item):
-
-                async def await_completed() -> Any:
-                    try:
-                        resolved = await completed_item  # type: ignore
-                    except Exception as raw_error:
-                        self.handle_field_error(
-                            raw_error,
-                            item_type,
-                            field_group,
-                            item_path,
-                            incremental_context,
-                        )
-                        return None
-                    parent.add_increments(resolved.increments)
-                    return resolved.result
-
-                complete_results.append(await_completed())
+                complete_results.append(
+                    await_list_item_completion(
+                        completed_item,
+                        self.handle_field_error,
+                        item_type,
+                        field_group,
+                        item_path,
+                        incremental_context,
+                        parent.add_increments,
+                    )
+                )
                 return True
 
             completed_item = cast("GraphQLWrappedResult[Any]", completed_item)
@@ -2076,6 +2094,15 @@ class GraphQLWrappedResult(Generic[T]):
             self.increments.extend(increments)
 
 
+# Singleton for null results (common for optional nullable fields)
+# Use a function to get it to avoid type issues
+def _null_wrapped_result() -> GraphQLWrappedResult[None]:
+    return _NULL_RESULT
+
+
+_NULL_RESULT: GraphQLWrappedResult[None] = GraphQLWrappedResult(None)
+
+
 UNEXPECTED_EXPERIMENTAL_DIRECTIVES = (
     "The provided schema unexpectedly contains experimental directives"
     " (@defer or @stream). These directives may only be utilized"
@@ -2455,11 +2482,14 @@ def default_field_resolver(source: Any, info: GraphQLResolveInfo, **args: Any) -
     """
     # Ensure source is a value for which property access is acceptable.
     field_name = info.field_name
-    value = (
-        source.get(field_name)
-        if isinstance(source, Mapping)
-        else getattr(source, field_name, None)
-    )
+    # Check dict first (most common) to avoid expensive Mapping isinstance
+    source_type = type(source)
+    if source_type is dict:
+        value = source.get(field_name)
+    elif isinstance(source, Mapping):
+        value = source.get(field_name)
+    else:
+        value = getattr(source, field_name, None)
     if callable(value):
         return value(info, **args)
     return value

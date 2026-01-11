@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, TypedDict, TypeGuard, cast, final
 
 from ..language import DirectiveLocation, ast
 from ..pyutils import inspect
@@ -44,6 +44,7 @@ class GraphQLDirectiveKwargs(TypedDict, total=False):
     ast_node: ast.DirectiveDefinitionNode | None
 
 
+@final
 class GraphQLDirective:  # noqa: PLW1641
     """GraphQL Directive
 

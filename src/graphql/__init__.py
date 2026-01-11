@@ -36,6 +36,23 @@ The sub-packages of GraphQL-core 3 are:
     Common useful computations upon the GraphQL language and type objects.
 """
 
+# Attempt to activate mypyc-compiled modules if graphql_mypyc is installed.
+# This must happen before other imports to ensure compiled modules are used.
+def _try_activate_mypyc() -> None:
+    try:
+        import graphql_mypyc
+
+        graphql_mypyc.activate()
+    except ImportError:
+        pass
+
+
+_try_activate_mypyc()
+del _try_activate_mypyc
+
+# mypyc compilation status utilities.
+from ._mypyc import get_mypyc_modules, is_mypyc_enabled
+
 # The GraphQL-core 3 and GraphQL.js version info.
 
 from .version import version, version_info, version_js, version_info_js
@@ -748,6 +765,7 @@ __all__ = [
     "get_nullable_type",
     "get_operation_ast",
     "get_variable_values",
+    "get_mypyc_modules",
     "graphql",
     "graphql_sync",
     "introspection_from_schema",
@@ -783,6 +801,7 @@ __all__ = [
     "is_type_definition_node",
     "is_type_extension_node",
     "is_type_node",
+    "is_mypyc_enabled",
     "is_type_sub_type_of",
     "is_type_system_definition_node",
     "is_type_system_extension_node",

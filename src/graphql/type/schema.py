@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from ..error import GraphQLError
     from ..language import OperationType, ast
 
-from typing import TypeAlias, TypedDict, TypeGuard
+from typing import TypeAlias, TypedDict, TypeGuard, final
 
 from ..pyutils import inspect
 from .definition import (
@@ -68,6 +68,7 @@ class GraphQLSchemaKwargs(TypedDict, total=False):
     assume_valid: bool
 
 
+@final
 class GraphQLSchema:
     """Schema Definition
 

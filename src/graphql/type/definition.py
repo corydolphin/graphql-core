@@ -7,11 +7,13 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Generic,
     NamedTuple,
     TypedDict,
     TypeVar,
     cast,
+    final,
     overload,
 )
 
@@ -62,6 +64,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "GraphQLAbstractType",
+    "GraphQLTypeKind",
     "GraphQLArgument",
     "GraphQLArgumentKwargs",
     "GraphQLArgumentMap",
@@ -155,12 +158,46 @@ __all__ = [
 ]
 
 
+class GraphQLTypeKind:
+    """Type kind constants for fast dispatch (avoids isinstance overhead)."""
+
+    # Bit flags for efficient type category checks
+    NON_NULL = 1
+    LIST = 2
+    SCALAR = 4
+    ENUM = 8
+    OBJECT = 16
+    INTERFACE = 32
+    UNION = 64
+    INPUT_OBJECT = 128
+
+    # Composite categories (precomputed bitmasks)
+    LEAF = SCALAR | ENUM
+    COMPOSITE = OBJECT | INTERFACE | UNION
+    ABSTRACT = INTERFACE | UNION
+    INPUT = SCALAR | ENUM | INPUT_OBJECT
+    OUTPUT = SCALAR | ENUM | OBJECT | INTERFACE | UNION
+
+
 class GraphQLType:
     """Base class for all GraphQL types"""
 
     # Note: We don't use slots for GraphQLType objects because memory considerations
     # are not really important for the schema definition, and it would make caching
     # properties slower or more complicated.
+
+    # Type kind for fast dispatch (set by subclasses)
+    _kind: ClassVar[int] = 0
+
+    # Type tags for fast type checking (avoids isinstance overhead in hot paths)
+    _is_non_null_type: ClassVar[bool] = False
+    _is_list_type: ClassVar[bool] = False
+    _is_leaf_type: ClassVar[bool] = False
+    _is_composite_type: ClassVar[bool] = False
+    _is_abstract_type: ClassVar[bool] = False
+    _is_object_type: ClassVar[bool] = False
+    _is_input_type: ClassVar[bool] = False
+    _is_output_type: ClassVar[bool] = False
 
 
 # There are predicates for each kind of GraphQL type.
@@ -230,7 +267,7 @@ class GraphQLNamedType(GraphQLType):
     ast_node: TypeDefinitionNode | None
     extension_ast_nodes: tuple[TypeExtensionNode, ...]
 
-    reserved_types: Mapping[str, GraphQLNamedType] = {}
+    reserved_types: ClassVar[Mapping[str, GraphQLNamedType]] = {}
 
     def __new__(cls, name: str, *_args: Any, **_kwargs: Any) -> GraphQLNamedType:
         """Create a GraphQL named type."""
@@ -318,6 +355,7 @@ class GraphQLScalarTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     specified_by_url: str | None
 
 
+@final
 class GraphQLScalarType(GraphQLNamedType):
     """Scalar Type Definition
 
@@ -345,6 +383,11 @@ class GraphQLScalarType(GraphQLNamedType):
         odd_type = GraphQLScalarType('Odd', serialize=serialize_odd)
 
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.SCALAR
+    _is_leaf_type: ClassVar[bool] = True
+    _is_input_type: ClassVar[bool] = True
+    _is_output_type: ClassVar[bool] = True
 
     specified_by_url: str | None
     ast_node: ScalarTypeDefinitionNode | None
@@ -467,6 +510,7 @@ class GraphQLFieldKwargs(TypedDict, total=False):
     ast_node: FieldDefinitionNode | None
 
 
+@final
 class GraphQLField:  # noqa: PLW1641
     """Definition of a GraphQL field"""
 
@@ -478,6 +522,8 @@ class GraphQLField:  # noqa: PLW1641
     deprecation_reason: str | None
     extensions: dict[str, Any]
     ast_node: FieldDefinitionNode | None
+    # Pre-computed flag for execution optimization
+    _has_args: bool  # True if field has argument definitions
 
     def __init__(
         self,
@@ -507,6 +553,8 @@ class GraphQLField:  # noqa: PLW1641
         self.deprecation_reason = deprecation_reason
         self.extensions = extensions or {}
         self.ast_node = ast_node
+        # Pre-compute flag for fast execution paths
+        self._has_args = bool(self.args)
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.type!r}>"
@@ -544,9 +592,12 @@ class GraphQLField:  # noqa: PLW1641
 
 TContext = TypeVar("TContext")  # pylint: disable=invalid-name
 
-try:
+# Use TYPE_CHECKING for generic version (type checkers), simple version at runtime.
+# This avoids mypyc issues with conditional class definitions and Python 3.10
+# incompatibility with NamedTuple + Generic.
+if TYPE_CHECKING:
 
-    class GraphQLResolveInfo(NamedTuple, Generic[TContext]):  # pyright: ignore
+    class GraphQLResolveInfo(NamedTuple, Generic[TContext]):
         """Collection of information passed to the resolvers.
 
         This is always passed as the first argument to the resolvers.
@@ -568,11 +619,10 @@ try:
         variable_values: dict[str, Any]
         context: TContext
         is_awaitable: Callable[[Any], TypeGuard[Awaitable]]
-except TypeError as error:  # pragma: no cover
-    if "Multiple inheritance with NamedTuple is not supported" not in str(error):
-        raise  # only catch expected error for Python 3.10
 
-    class GraphQLResolveInfo(NamedTuple):  # type: ignore[no-redef]
+else:
+
+    class GraphQLResolveInfo(NamedTuple):
         """Collection of information passed to the resolvers.
 
         This is always passed as the first argument to the resolvers.
@@ -632,6 +682,7 @@ class GraphQLArgumentKwargs(TypedDict, total=False):
     ast_node: InputValueDefinitionNode | None
 
 
+@final
 class GraphQLArgument:  # noqa: PLW1641
     """Definition of a GraphQL argument"""
 
@@ -701,6 +752,7 @@ class GraphQLObjectTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     is_type_of: GraphQLIsTypeOfFn | None
 
 
+@final
 class GraphQLObjectType(GraphQLNamedType):
     """Object Type Definition
 
@@ -728,6 +780,11 @@ class GraphQLObjectType(GraphQLNamedType):
         })
 
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.OBJECT
+    _is_composite_type: ClassVar[bool] = True
+    _is_object_type: ClassVar[bool] = True
+    _is_output_type: ClassVar[bool] = True
 
     is_type_of: GraphQLIsTypeOfFn | None
     ast_node: ObjectTypeDefinitionNode | None
@@ -818,6 +875,7 @@ class GraphQLInterfaceTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     resolve_type: GraphQLTypeResolver | None
 
 
+@final
 class GraphQLInterfaceType(GraphQLNamedType):
     """Interface Type Definition
 
@@ -832,6 +890,11 @@ class GraphQLInterfaceType(GraphQLNamedType):
                 'name': GraphQLField(GraphQLString),
             })
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.INTERFACE
+    _is_composite_type: ClassVar[bool] = True
+    _is_abstract_type: ClassVar[bool] = True
+    _is_output_type: ClassVar[bool] = True
 
     resolve_type: GraphQLTypeResolver | None
     ast_node: InterfaceTypeDefinitionNode | None
@@ -921,6 +984,7 @@ class GraphQLUnionTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     resolve_type: GraphQLTypeResolver | None
 
 
+@final
 class GraphQLUnionType(GraphQLNamedType):
     """Union Type Definition
 
@@ -938,6 +1002,11 @@ class GraphQLUnionType(GraphQLNamedType):
 
         PetType = GraphQLUnionType('Pet', [DogType, CatType], resolve_type)
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.UNION
+    _is_composite_type: ClassVar[bool] = True
+    _is_abstract_type: ClassVar[bool] = True
+    _is_output_type: ClassVar[bool] = True
 
     resolve_type: GraphQLTypeResolver | None
     ast_node: UnionTypeDefinitionNode | None
@@ -1013,6 +1082,7 @@ class GraphQLEnumTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     names_as_values: bool | None
 
 
+@final
 class GraphQLEnumType(GraphQLNamedType):
     """Enum Type Definition
 
@@ -1046,6 +1116,11 @@ class GraphQLEnumType(GraphQLNamedType):
     Note: If a value is not provided in a definition, the name of the enum value will
     be used as its internal value when the value is serialized.
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.ENUM
+    _is_leaf_type: ClassVar[bool] = True
+    _is_input_type: ClassVar[bool] = True
+    _is_output_type: ClassVar[bool] = True
 
     values: GraphQLEnumValueMap
     ast_node: EnumTypeDefinitionNode | None
@@ -1209,6 +1284,7 @@ class GraphQLEnumValueKwargs(TypedDict, total=False):
     ast_node: EnumValueDefinitionNode | None
 
 
+@final
 class GraphQLEnumValue:  # noqa: PLW1641
     """A GraphQL enum value."""
 
@@ -1267,6 +1343,7 @@ class GraphQLInputObjectTypeKwargs(GraphQLNamedTypeKwargs, total=False):
     is_one_of: bool
 
 
+@final
 class GraphQLInputObjectType(GraphQLNamedType):
     """Input Object Type Definition
 
@@ -1291,6 +1368,9 @@ class GraphQLInputObjectType(GraphQLNamedType):
     The outbound values will be Python dictionaries by default, but you can have them
     converted to other types by specifying an ``out_type`` function or class.
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.INPUT_OBJECT
+    _is_input_type: ClassVar[bool] = True
 
     ast_node: InputObjectTypeDefinitionNode | None
     extension_ast_nodes: tuple[InputObjectTypeExtensionNode, ...]
@@ -1383,6 +1463,7 @@ class GraphQLInputFieldKwargs(TypedDict, total=False):
     ast_node: InputValueDefinitionNode | None
 
 
+@final
 class GraphQLInputField:  # noqa: PLW1641
     """Definition of a GraphQL input field"""
 
@@ -1447,6 +1528,7 @@ def is_required_input_field(field: GraphQLInputField) -> bool:
 # Wrapper types
 
 
+@final
 class GraphQLList(GraphQLWrappingType[GT_co]):
     """List Type Wrapper
 
@@ -1466,6 +1548,9 @@ class GraphQLList(GraphQLWrappingType[GT_co]):
                 }
     """
 
+    _kind: ClassVar[int] = GraphQLTypeKind.LIST
+    _is_list_type: ClassVar[bool] = True
+
     def __init__(self, type_: GT_co) -> None:
         super().__init__(type_=type_)
 
@@ -1475,7 +1560,7 @@ class GraphQLList(GraphQLWrappingType[GT_co]):
 
 def is_list_type(type_: Any) -> TypeGuard[GraphQLList]:
     """Check whether this is a GraphQL list type."""
-    return isinstance(type_, GraphQLList)
+    return getattr(type_, "_is_list_type", False)
 
 
 def assert_list_type(type_: Any) -> GraphQLList:
@@ -1489,6 +1574,7 @@ def assert_list_type(type_: Any) -> GraphQLList:
 GNT_co = TypeVar("GNT_co", bound="GraphQLNullableType", covariant=True)
 
 
+@final
 class GraphQLNonNull(GraphQLWrappingType[GNT_co]):
     """Non-Null Type Wrapper
 
@@ -1508,6 +1594,9 @@ class GraphQLNonNull(GraphQLWrappingType[GNT_co]):
 
     Note: the enforcement of non-nullability occurs within the executor.
     """
+
+    _kind: ClassVar[int] = GraphQLTypeKind.NON_NULL
+    _is_non_null_type: ClassVar[bool] = True
 
     def __init__(self, type_: GNT_co) -> None:
         super().__init__(type_=type_)
