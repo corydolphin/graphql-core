@@ -123,71 +123,19 @@ async def resolve_user_following(user: dict, _info: Any, limit: int = 10) -> lis
     return [USERS[str(fid)] for fid in following_ids if str(fid) in USERS]
 
 
-# Field resolvers for scalar fields (still async to test async path)
-async def resolve_id(obj: dict, _info: Any) -> str:
-    return obj["id"]
+# Note: Scalar fields use the default resolver (dict key access) which is sync.
+# Only relationship fields (author, posts, comments, followers, following) have
+# explicit async resolvers to simulate real-world data fetching patterns.
 
 
-async def resolve_username(obj: dict, _info: Any) -> str:
-    return obj["username"]
-
-
-async def resolve_email(obj: dict, _info: Any) -> str:
-    return obj["email"]
-
-
-async def resolve_display_name(obj: dict, _info: Any) -> str:
-    return obj["displayName"]
-
-
-async def resolve_bio(obj: dict, _info: Any) -> str:
-    return obj["bio"]
-
-
-async def resolve_follower_count(obj: dict, _info: Any) -> int:
-    return obj["followerCount"]
-
-
-async def resolve_following_count(obj: dict, _info: Any) -> int:
-    return obj["followingCount"]
-
-
-async def resolve_title(obj: dict, _info: Any) -> str:
-    return obj["title"]
-
-
-async def resolve_content(obj: dict, _info: Any) -> str:
-    return obj["content"]
-
-
-async def resolve_text(obj: dict, _info: Any) -> str:
-    return obj["text"]
-
-
-async def resolve_like_count(obj: dict, _info: Any) -> int:
-    return obj["likeCount"]
-
-
-async def resolve_comment_count(obj: dict, _info: Any) -> int:
-    return obj["commentCount"]
-
-
-async def resolve_created_at(obj: dict, _info: Any) -> str:
-    return obj["createdAt"]
-
-
-async def resolve_updated_at(obj: dict, _info: Any) -> str:
-    return obj.get("updatedAt", obj["createdAt"])
-
-
-# Build schema with explicit async resolvers
+# Build schema - scalar fields use default resolver, only relationships are async
 CommentType: GraphQLObjectType = GraphQLObjectType(
     name="Comment",
     fields=lambda: {
-        "id": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_id),
-        "text": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_text),
-        "likeCount": GraphQLField(GraphQLNonNull(GraphQLInt), resolve=resolve_like_count),
-        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_created_at),
+        "id": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "text": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "likeCount": GraphQLField(GraphQLNonNull(GraphQLInt)),
+        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString)),
         "author": GraphQLField(UserType, resolve=resolve_comment_author),
         "post": GraphQLField(PostType, resolve=resolve_comment_post),
     },
@@ -196,13 +144,13 @@ CommentType: GraphQLObjectType = GraphQLObjectType(
 PostType: GraphQLObjectType = GraphQLObjectType(
     name="Post",
     fields=lambda: {
-        "id": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_id),
-        "title": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_title),
-        "content": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_content),
-        "likeCount": GraphQLField(GraphQLNonNull(GraphQLInt), resolve=resolve_like_count),
-        "commentCount": GraphQLField(GraphQLNonNull(GraphQLInt), resolve=resolve_comment_count),
-        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_created_at),
-        "updatedAt": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_updated_at),
+        "id": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "title": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "content": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "likeCount": GraphQLField(GraphQLNonNull(GraphQLInt)),
+        "commentCount": GraphQLField(GraphQLNonNull(GraphQLInt)),
+        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "updatedAt": GraphQLField(GraphQLNonNull(GraphQLString)),
         "author": GraphQLField(UserType, resolve=resolve_post_author),
         "comments": GraphQLField(
             GraphQLNonNull(GraphQLList(GraphQLNonNull(CommentType))),
@@ -215,14 +163,14 @@ PostType: GraphQLObjectType = GraphQLObjectType(
 UserType: GraphQLObjectType = GraphQLObjectType(
     name="User",
     fields=lambda: {
-        "id": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_id),
-        "username": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_username),
-        "email": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_email),
-        "displayName": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_display_name),
-        "bio": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_bio),
-        "followerCount": GraphQLField(GraphQLNonNull(GraphQLInt), resolve=resolve_follower_count),
-        "followingCount": GraphQLField(GraphQLNonNull(GraphQLInt), resolve=resolve_following_count),
-        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString), resolve=resolve_created_at),
+        "id": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "username": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "email": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "displayName": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "bio": GraphQLField(GraphQLNonNull(GraphQLString)),
+        "followerCount": GraphQLField(GraphQLNonNull(GraphQLInt)),
+        "followingCount": GraphQLField(GraphQLNonNull(GraphQLInt)),
+        "createdAt": GraphQLField(GraphQLNonNull(GraphQLString)),
         "posts": GraphQLField(
             GraphQLNonNull(GraphQLList(GraphQLNonNull(PostType))),
             args={"limit": GraphQLArgument(GraphQLInt, default_value=10)},

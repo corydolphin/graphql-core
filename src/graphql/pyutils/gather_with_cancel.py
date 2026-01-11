@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from asyncio import Task, create_task, gather
+from asyncio import AbstractEventLoop, Task, gather, get_running_loop
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -10,25 +10,26 @@ if TYPE_CHECKING:
 
 __all__ = ["gather_with_cancel"]
 
+# Module-level cache for the running loop
+_cached_loop: AbstractEventLoop | None = None
+
 
 async def gather_with_cancel(*awaitables: Awaitable[Any]) -> list[Any]:
     """Run awaitable objects in the sequence concurrently.
 
     The first raised exception is immediately propagated to the task that awaits
     on this function and all pending awaitables in the sequence will be cancelled.
-
-    This is different from the default behavior or `asyncio.gather` which waits
-    for all tasks to complete even if one of them raises an exception. It is also
-    different from `asyncio.gather` with `return_exceptions` set, which does not
-    cancel the other tasks when one of them raises an exception.
     """
-    try:
-        tasks: list[Task[Any]] = [
-            aw if isinstance(aw, Task) else create_task(aw)  # type: ignore[arg-type]
-            for aw in awaitables
-        ]
-    except TypeError:
-        return await gather(*awaitables)
+    global _cached_loop  # noqa: PLW0603
+
+    # Cache the running loop to avoid repeated get_running_loop() calls
+    loop = _cached_loop
+    if loop is None or not loop.is_running():
+        loop = _cached_loop = get_running_loop()
+
+    # Use loop.create_task directly - faster than asyncio.create_task
+    tasks: list[Task[Any]] = [loop.create_task(aw) for aw in awaitables]  # type: ignore[arg-type]
+
     try:
         return await gather(*tasks)
     except Exception:
