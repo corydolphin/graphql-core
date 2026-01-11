@@ -20,7 +20,6 @@ from pathlib import Path
 # Modules to compile with mypyc.
 # Excluded due to mypyc limitations:
 #   definition.py - conditional class definitions
-#   execute.py - complex async triggers code-gen bugs
 #   visitor.py - designed for subclassing
 #   block_string.py - duck typing with lazy strings
 #   type_comparators.py - type issues (list vs tuple)
@@ -47,7 +46,8 @@ MYPYC_MODULES = [
     "graphql/utilities/ast_from_value.py",
     "graphql/utilities/type_from_ast.py",
     "graphql/utilities/type_info.py",
-    # Execution
+    # Execution (core execution engine)
+    "graphql/execution/execute.py",
     "graphql/execution/collect_fields.py",
     "graphql/execution/values.py",
     "graphql/execution/execute_sync.py",

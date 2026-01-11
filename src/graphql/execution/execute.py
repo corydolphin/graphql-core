@@ -54,6 +54,7 @@ from ..type import (
     GraphQLFieldResolver,
     GraphQLLeafType,
     GraphQLList,
+    GraphQLNonNull,
     GraphQLObjectType,
     GraphQLOutputType,
     GraphQLResolveInfo,
@@ -765,13 +766,19 @@ class ExecutionContext(IncrementalPublisherContext):
         # Fast path for common case: NonNull[LeafType] with non-null, non-exception result
         # This is the most common pattern in typical GraphQL responses
         if return_type._is_non_null_type:
-            inner_type = return_type.of_type
+            # Cast for mypyc: after checking _is_non_null_type, we know it's GraphQLNonNull
+            non_null_type = cast("GraphQLNonNull[Any]", return_type)
+            inner_type: GraphQLOutputType = non_null_type.of_type
             # Fast path: NonNull[Leaf] with valid result (no Exception check needed for
             # normal dict values, and leaf completion doesn't recurse)
             if inner_type._is_leaf_type and result is not None and result is not Undefined:
                 if isinstance(result, Exception):
                     raise result
-                return GraphQLWrappedResult(self.complete_leaf_value(inner_type, result))
+                return GraphQLWrappedResult(
+                    self.complete_leaf_value(
+                        cast("GraphQLLeafType", inner_type), result
+                    )
+                )
 
             # Standard NonNull path with recursion
             if isinstance(result, Exception):
@@ -804,7 +811,7 @@ class ExecutionContext(IncrementalPublisherContext):
         # If field type is List, complete each item in the list with inner type
         if return_type._is_list_type:
             return self.complete_list_value(
-                return_type,
+                cast("GraphQLList[GraphQLOutputType]", return_type),
                 field_group,
                 info,
                 path,
@@ -816,13 +823,15 @@ class ExecutionContext(IncrementalPublisherContext):
         # If field type is a leaf type, Scalar or Enum, serialize to a valid value,
         # returning null if serialization is not possible.
         if return_type._is_leaf_type:
-            return GraphQLWrappedResult(self.complete_leaf_value(return_type, result))
+            return GraphQLWrappedResult(
+                self.complete_leaf_value(cast("GraphQLLeafType", return_type), result)
+            )
 
         # If field type is an abstract type, Interface or Union, determine the runtime
         # Object type and complete for that type.
         if return_type._is_abstract_type:
             return self.complete_abstract_value(
-                return_type,
+                cast("GraphQLAbstractType", return_type),
                 field_group,
                 info,
                 path,
@@ -834,7 +843,7 @@ class ExecutionContext(IncrementalPublisherContext):
         # If field type is Object, execute and complete all sub-selections.
         if return_type._is_object_type:
             return self.complete_object_value(
-                return_type,
+                cast("GraphQLObjectType", return_type),
                 field_group,
                 info,
                 path,
