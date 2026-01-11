@@ -5,6 +5,8 @@ This benchmark simulates a realistic social network API with:
 - List fields with multiple items
 - All async resolvers to test the async execution path
 - Various query depths and breadths
+
+Queries are pre-parsed and pre-validated to measure only execution time.
 """
 
 import asyncio
@@ -13,6 +15,7 @@ from typing import Any
 import pytest
 
 from graphql import (
+    DocumentNode,
     GraphQLArgument,
     GraphQLField,
     GraphQLInt,
@@ -21,7 +24,9 @@ from graphql import (
     GraphQLObjectType,
     GraphQLSchema,
     GraphQLString,
-    graphql,
+    execute,
+    parse,
+    validate,
 )
 
 # Simulated data store
@@ -419,6 +424,25 @@ query {
 """
 
 
+def _prepare_query(query_str: str) -> DocumentNode:
+    """Parse and validate a query, returning the document for execution."""
+    document = parse(query_str)
+    errors = validate(schema, document)
+    if errors:
+        raise ValueError(f"Query validation failed: {errors}")
+    return document
+
+
+# Pre-parse and pre-validate all queries at module load time
+# This ensures benchmarks measure only execution time
+DOC_SIMPLE = _prepare_query(QUERY_SIMPLE)
+DOC_MEDIUM = _prepare_query(QUERY_MEDIUM)
+DOC_COMPLEX = _prepare_query(QUERY_COMPLEX)
+DOC_FEED = _prepare_query(QUERY_FEED)
+DOC_SOCIAL = _prepare_query(QUERY_SOCIAL)
+DOC_DEEP = _prepare_query(QUERY_DEEP)
+
+
 @pytest.fixture
 def event_loop():
     """Create event loop for async benchmarks."""
@@ -428,49 +452,49 @@ def event_loop():
 
 
 def test_social_simple(benchmark, event_loop):
-    """Benchmark simple user query with 4 scalar fields."""
+    """Benchmark simple user query with 4 scalar fields (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_SIMPLE)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_SIMPLE)))
     assert not result.errors
     assert result.data["user"]["username"] == "user_1"
 
 
 def test_social_medium(benchmark, event_loop):
-    """Benchmark user with posts (5 posts, 5 fields each)."""
+    """Benchmark user with posts - 5 posts, 5 fields each (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_MEDIUM)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_MEDIUM)))
     assert not result.errors
     assert len(result.data["user"]["posts"]) == 5
 
 
 def test_social_complex(benchmark, event_loop):
-    """Benchmark complex nested query (user -> posts -> comments -> authors)."""
+    """Benchmark complex nested query - user -> posts -> comments -> authors (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_COMPLEX)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_COMPLEX)))
     assert not result.errors
     assert len(result.data["user"]["posts"]) == 5
 
 
 def test_social_feed(benchmark, event_loop):
-    """Benchmark feed query (10 posts with authors and comments)."""
+    """Benchmark feed query - 10 posts with authors and comments (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_FEED)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_FEED)))
     assert not result.errors
     assert len(result.data["posts"]) == 10
 
 
 def test_social_network(benchmark, event_loop):
-    """Benchmark social graph query (user with followers and following)."""
+    """Benchmark social graph query - user with followers and following (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_SOCIAL)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_SOCIAL)))
     assert not result.errors
     assert len(result.data["user"]["followers"]) == 5
     assert len(result.data["user"]["following"]) == 5
 
 
 def test_social_deep(benchmark, event_loop):
-    """Benchmark deeply nested query (4 levels deep)."""
+    """Benchmark deeply nested query - 4 levels deep (execution only)."""
     asyncio.set_event_loop(event_loop)
-    result = benchmark(lambda: event_loop.run_until_complete(graphql(schema, QUERY_DEEP)))
+    result = benchmark(lambda: event_loop.run_until_complete(execute(schema, DOC_DEEP)))
     assert not result.errors
     assert len(result.data["user"]["posts"]) == 3
