@@ -24,21 +24,51 @@ from pathlib import Path
 #   visitor.py - designed for subclassing
 #   block_string.py - duck typing with lazy strings
 #   type_comparators.py - type issues (list vs tuple)
+#   incremental_graph.py - complex generics
 MYPYC_MODULES = [
+    # Core sentinel for mypyc activation detection
     "graphql_mypyc/_sentinel.py",
+    # Type system
     "graphql/type/scalars.py",
+    "graphql/type/assert_name.py",
+    # Language/parsing
     "graphql/language/lexer.py",
     "graphql/language/parser.py",
     "graphql/language/predicates.py",
     "graphql/language/character_classes.py",
+    "graphql/language/source.py",
+    "graphql/language/location.py",
+    "graphql/language/token_kind.py",
+    "graphql/language/directive_locations.py",
+    "graphql/language/print_string.py",
+    # Utilities
     "graphql/utilities/coerce_input_value.py",
     "graphql/utilities/value_from_ast.py",
     "graphql/utilities/ast_from_value.py",
     "graphql/utilities/type_from_ast.py",
+    "graphql/utilities/type_info.py",
+    # Execution
     "graphql/execution/collect_fields.py",
     "graphql/execution/values.py",
     "graphql/execution/execute_sync.py",
     "graphql/execution/async_helpers.py",
+    "graphql/execution/build_field_plan.py",
+    "graphql/execution/types.py",
+    # Error handling
+    "graphql/error/graphql_error.py",
+    "graphql/error/located_error.py",
+    # Pyutils - hot paths
+    "graphql/pyutils/path.py",
+    "graphql/pyutils/is_awaitable.py",
+    "graphql/pyutils/is_iterable.py",
+    "graphql/pyutils/gather_with_cancel.py",
+    "graphql/pyutils/async_reduce.py",
+    "graphql/pyutils/ref_map.py",
+    "graphql/pyutils/convert_case.py",
+    "graphql/pyutils/suggestion_list.py",
+    # Validation
+    "graphql/validation/validate.py",
+    "graphql/validation/validation_context.py",
 ]
 
 
